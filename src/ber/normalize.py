@@ -252,6 +252,7 @@ ADDRESS_GENERIC = {
 }
 
 _ORDINAL = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
+_GLUED = re.compile(r"^([a-z]{1,4})(\d+)$")
 
 
 def _replace_states(text, country):
@@ -275,10 +276,15 @@ def normalize_address(address, country):
     key     : norm minus generic street-type words (identifying words + numbers)
     """
     low = to_ascii_lower(address or "")
-    low = re.sub(r"['’`.]", "", low)           # H.No -> hno, St. -> st
+    low = re.sub(r"['’`]", "", low)
+    low = low.replace(".", " ")                 # 'No.301' -> 'no 301' (deleting dots glued numbers to words)
     low = _replace_states(" ".join(tokens(low)), country)
     out = []
-    for t in low.split():
+    toks = []
+    for t in low.split():                       # split 'no301' / 'g02' -> 'no 301' / 'g 2'
+        m = _GLUED.match(t)
+        toks += [m.group(1), m.group(2)] if m and not _ORDINAL.match(t) else [t]
+    for t in toks:
         m = _ORDINAL.match(t)
         if m:
             t = m.group(1)
