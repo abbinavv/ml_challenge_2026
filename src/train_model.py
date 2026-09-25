@@ -30,6 +30,12 @@ import polars as pl
 from ber.decide import select, select_expected, tune_threshold
 from ber.features import (COMPETITION_FEATURES, FEATURES, add_group_features,
                           build_pairs, compute_features)
+
+# Cheap features for the candidate filter: blocking/competition scores plus a few
+# fast string similarities.
+STAGE1_FEATURES = ["cos", "rank", "cos_gap", "cos_ratio", "n_cands", "cand_n_lists",
+                   "cand_best_cos", "cos_minus_cand_best", "is_cand_best",
+                   "name_tset", "addr_tset", "nums_jacc", "compact_eq", "key_tset"]
 from ber.io import load_ground_truth, load_source
 from ber.metrics import macro_f05, report
 
@@ -56,6 +62,8 @@ def main():
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--n-train", type=int, default=300000)
     ap.add_argument("--n-val", type=int, default=100000)
+    ap.add_argument("--stage1-keep", type=float, default=0.995,
+                    help="share of blocking-found true matches the candidate filter must keep")
     args = ap.parse_args()
     t0 = time.time()
 
@@ -82,6 +90,32 @@ def main():
     log(f"features: train pairs={tr.height:,} (pos {tr['label'].sum():,}), "
         f"val pairs={va.height:,} ({time.time()-t0:.0f}s)")
 
+    # ---- Stage B: cheap candidate filter -> candidate_pairs.tsv --------------------
+    # The organisers rank smaller candidate sets higher. A small model on cheap
+    # features prunes obvious non-matches; its cut-off keeps `stage1_keep` of the true
+    # matches that blocking found (measured on validation). Survivors are the
+    # candidate set, and the main model is trained and applied on survivors only.
+    s1_feats = [f for f in STAGE1_FEATURES if f in feats]
+    p1 = dict(objective="binary", learning_rate=0.1, num_leaves=31, min_data_in_leaf=200,
+              num_threads=10, verbose=-1, seed=7)
+    m1 = lgb.train(p1, lgb.Dataset(tr.select(s1_feats).to_numpy(), label=tr["label"].to_numpy()),
+                   num_boost_round=300)
+    tr = tr.with_columns(pl.Series("p1", m1.predict(tr.select(s1_feats).to_numpy())))
+    va = va.with_columns(pl.Series("p1", m1.predict(va.select(s1_feats).to_numpy())))
+    pos = np.sort(va.filter(pl.col("label") == 1)["p1"].to_numpy())
+    n_blocked_pos = len(pos)
+    log(f"candidate filter (stage B) on validation — blocking gives {va.height / len(va_ents):.1f} candidates/entity:")
+    for keep in (0.98, 0.99, 0.995, 0.998, 0.999):
+        t = float(pos[int(len(pos) * (1 - keep))])
+        log(f"  keep {keep:.1%} of found matches: cut-off {t:.4f} -> "
+            f"{va.filter(pl.col('p1') >= t).height / len(va_ents):.2f} candidates/entity")
+    t1 = float(pos[int(len(pos) * (1 - args.stage1_keep))])
+    tr, va = tr.filter(pl.col("p1") >= t1), va.filter(pl.col("p1") >= t1)
+    cands_per_entity = va.height / len(va_ents)
+    log(f"chosen cut-off {t1:.4f}: {cands_per_entity:.2f} candidates/entity, "
+        f"{va['label'].sum() / n_blocked_pos:.2%} of blocking-found matches kept")
+
+    # ---- Stage C: main model on the candidate set ---------------------------------
     dtr = lgb.Dataset(tr.select(feats).to_numpy(), label=tr["label"].to_numpy(), feature_name=feats)
     dva = lgb.Dataset(va.select(feats).to_numpy(), label=va["label"].to_numpy(), reference=dtr)
     params = dict(objective="binary", learning_rate=0.08, num_leaves=127, min_data_in_leaf=100,
@@ -127,7 +161,10 @@ def main():
     imp = sorted(zip(feats, model.feature_importance("gain")), key=lambda x: -x[1])
     os.makedirs(args.out_dir, exist_ok=True)
     model.save_model(os.path.join(args.out_dir, "model.txt"), num_iteration=model.best_iteration)
+    m1.save_model(os.path.join(args.out_dir, "stage1.txt"))
     meta = {"features": feats, "decision": decision, "threshold": best_t,
+            "stage1": {"features": s1_feats, "cutoff": t1, "keep": args.stage1_keep,
+                       "candidates_per_entity_val": cands_per_entity},
             "validation": rep, "per_country": per_country, "blocking_recall": recall,
             "decision_options": {str(k): v for k, v in options.items()},
             "threshold_grid": grid, "feature_importance_gain": [(f, float(g)) for f, g in imp]}

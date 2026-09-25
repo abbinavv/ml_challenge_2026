@@ -26,14 +26,19 @@ def log(msg):
     print(msg, flush=True)
 
 
-def score_all(cands, model, feats, s1, pool, chunk_entities=100000):
-    """Compute features and model probabilities for all candidate pairs, chunked by S1."""
+def score_all(cands, model, feats, s1, pool, stage1=None, chunk_entities=100000):
+    """Features + probabilities for all blocking pairs, chunked by S1. With a
+    stage-1 filter, pairs below its cut-off are dropped (they are not candidates)
+    and the main model scores only the survivors."""
     ents = cands["s1_id"].unique().to_list()
     parts = []
     for i in range(0, len(ents), chunk_entities):
         t = time.time()
         sub = cands.filter(pl.col("s1_id").is_in(ents[i:i + chunk_entities]))
         pairs = compute_features(build_pairs(sub, s1, pool))
+        if stage1 is not None:
+            m1, f1, cut = stage1
+            pairs = pairs.filter(pl.Series(m1.predict(pairs.select(f1).to_numpy()) >= cut))
         prob = model.predict(pairs.select(feats).to_numpy())
         parts.append(pairs.select("s1_id", "cand_id").with_columns(pl.Series("prob", prob)))
         log(f"  scored {min(i + chunk_entities, len(ents)):,}/{len(ents):,} entities ({time.time()-t:.0f}s)")
@@ -68,13 +73,18 @@ def main(cands_path, model_dir, out_dir, threshold=None):
     if threshold is not None:  # explicit override -> plain threshold rule
         decision = {"method": "threshold", "threshold": float(threshold)}
     model = lgb.Booster(model_file=os.path.join(model_dir, "model.txt"))
+    stage1 = None
+    if "stage1" in meta:
+        stage1 = (lgb.Booster(model_file=os.path.join(model_dir, "stage1.txt")),
+                  meta["stage1"]["features"], meta["stage1"]["cutoff"])
 
     s1 = load_source("test", 1)
     pool = pl.concat([load_source("test", 2), load_source("test", 3)])
     cands = add_group_features(pl.read_parquet(cands_path))
     log(f"test: {s1.height:,} S1, {cands.height:,} candidate pairs")
 
-    scored = score_all(cands, model, feats, s1, pool)
+    scored = score_all(cands, model, feats, s1, pool, stage1=stage1)
+    log(f"candidate set: {scored.height:,} pairs = {scored.height / s1.height:.2f} per S1 entity")
     os.makedirs(out_dir, exist_ok=True)
     scored.write_parquet(os.path.join(out_dir, "scored_pairs.parquet"))
     write_outputs(scored, s1["entity_id"].to_list(), decision, out_dir)
