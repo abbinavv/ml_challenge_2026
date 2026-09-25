@@ -41,3 +41,6 @@ data
 
 # --- model artifacts ---
 artifacts/
+
+# --- compressed submission copies (shared privately, never pushed) ---
+submissions/*/

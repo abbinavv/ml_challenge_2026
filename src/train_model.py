@@ -64,18 +64,32 @@ def main():
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--n-train", type=int, default=300000)
     ap.add_argument("--n-val", type=int, default=100000)
+    ap.add_argument("--drop-s1", type=float, default=0.0,
+                    help="hide this share of S1 entities: their records stay in the pool with no owner, "
+                         "like the extra decoys in test (test has ~5.75 records per S1 vs 4.68 in train -> 0.186)")
+    ap.add_argument("--eval-model", default=None,
+                    help="also score an existing model dir on this validation set (e.g. to measure the shift)")
     ap.add_argument("--stage1-keep", type=float, default=0.995,
                     help="share of blocking-found true matches the candidate filter must keep")
     args = ap.parse_args()
     t0 = time.time()
 
     feats = [f for f in FEATURES if args.full or f not in COMPETITION_FEATURES]
-    cands = add_group_features(pl.read_parquet(args.cands))  # on the FULL candidate set
-
-    # disjoint entity samples (drawn from all S1 queries, so entities without candidates count too)
+    cands = pl.read_parquet(args.cands)
     ents = np.array(sorted(cands["s1_id"].unique().to_list()))
     rng = np.random.default_rng(7)
     rng.shuffle(ents)
+    if args.drop_s1 > 0:
+        # Test has ~2x the decoys of train. Hide a share of S1 entities BEFORE the
+        # competition features are computed: their true records stay in other
+        # entities' candidate lists but nobody owns them any more (orphan decoys).
+        n_drop = int(len(ents) * args.drop_s1)
+        dropped, ents = ents[:n_drop], ents[n_drop:]
+        cands = cands.filter(~pl.col("s1_id").is_in(dropped.tolist()))
+        log(f"density simulation: hid {n_drop:,} S1 entities ({args.drop_s1:.1%}); their records become ownerless decoys")
+    cands = add_group_features(cands)  # on the full (remaining) candidate set
+
+    # disjoint entity samples (drawn from all S1 queries, so entities without candidates count too)
     tr_ents = ents[:args.n_train].tolist()
     va_ents = ents[args.n_train:args.n_train + args.n_val].tolist()
     # keep only the sampled entities' pairs before loading anything else (memory)
@@ -97,6 +111,20 @@ def main():
     tr, va = labelled(tr_ents), labelled(va_ents)
     log(f"features: train pairs={tr.height:,} (pos {tr['label'].sum():,}), "
         f"val pairs={va.height:,} ({time.time()-t0:.0f}s)")
+
+    truths_all = {s: set(m) for s, m in gt.filter(pl.col("s1_id").is_in(va_ents))
+                  .group_by("s1_id").agg("match_id").iter_rows()}
+    if args.eval_model:
+        em = json.load(open(os.path.join(args.eval_model, "meta.json")))
+        m1e = lgb.Booster(model_file=os.path.join(args.eval_model, "stage1.txt"))
+        m2e = lgb.Booster(model_file=os.path.join(args.eval_model, "model.txt"))
+        ve = va.filter(pl.Series(m1e.predict(va.select(em["stage1"]["features"]).to_numpy()) >= em["stage1"]["cutoff"]))
+        ve = ve.with_columns(pl.Series("prob", m2e.predict(ve.select(em["features"]).to_numpy())))
+        d = em["decision"]
+        pe = select(ve, d["threshold"]) if d["method"] == "threshold" else select_expected(ve, floor=d["floor"], empty_weight=d["empty_weight"])
+        r = report(pe, truths_all, va_ents)
+        log(f"EXISTING MODEL {args.eval_model} on this validation: macro_f05={r['macro_f05']:.4f} "
+            f"P={r['pair_precision']:.4f} R={r['pair_recall']:.4f} singletons={r['singleton_score']:.4f}")
 
     # ---- Stage B: cheap candidate filter -> candidate_pairs.tsv --------------------
     # The organisers rank smaller candidate sets higher. A small model on cheap
