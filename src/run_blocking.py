@@ -11,6 +11,8 @@ from ber.io import load_source, CACHE_DIR
 from ber.blocking import block_all
 
 if __name__ == "__main__":
+    from ber.guard import exclusive
+    exclusive("run_blocking")
     split = sys.argv[1]
     k = int(sys.argv[2]) if len(sys.argv) > 2 else 20
     t = time.time()

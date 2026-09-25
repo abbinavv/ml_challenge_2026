@@ -59,4 +59,6 @@ def main():
 
 
 if __name__ == "__main__":
+    from ber.guard import exclusive
+    exclusive("learn_translit")
     main()

@@ -4,6 +4,8 @@ sys.path.insert(0, "src")
 from ber.io import build_source_cache
 
 if __name__ == "__main__":
+    from ber.guard import exclusive
+    exclusive("build_cache")
     for split in ("test", "train"):
         for source in (1, 2, 3):
             t = time.time()

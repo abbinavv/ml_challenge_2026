@@ -6,6 +6,8 @@ rejected, as raw name/address side by side, plus false merges.
 """
 import json, os, random, sys
 sys.path.insert(0, "src")
+from ber.guard import exclusive
+exclusive("error_analysis")
 import lightgbm as lgb
 import numpy as np
 import polars as pl

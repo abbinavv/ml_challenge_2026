@@ -92,4 +92,6 @@ def main(cands_path, model_dir, out_dir, threshold=None):
 
 
 if __name__ == "__main__":
+    from ber.guard import exclusive
+    exclusive("predict")
     main(*sys.argv[1:4], *(sys.argv[4:5]))

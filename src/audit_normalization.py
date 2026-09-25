@@ -11,6 +11,8 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, "src")
+from ber.guard import exclusive
+exclusive("audit_normalization")
 import polars as pl
 
 from ber.io import DATA_DIR, cache_path

@@ -11,6 +11,8 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, "src")
+from ber.guard import exclusive
+exclusive("compare_normalization")
 import polars as pl
 from rapidfuzz import fuzz
 

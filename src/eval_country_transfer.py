@@ -8,6 +8,8 @@ with the source-country threshold, which is what France will get).
 """
 import sys
 sys.path.insert(0, "src")
+from ber.guard import exclusive
+exclusive("eval_country_transfer")
 import lightgbm as lgb
 import numpy as np
 import polars as pl
