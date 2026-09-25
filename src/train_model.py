@@ -35,7 +35,9 @@ from ber.features import (COMPETITION_FEATURES, FEATURES, add_group_features,
 # fast string similarities.
 STAGE1_FEATURES = ["cos", "rank", "cos_gap", "cos_ratio", "n_cands", "cand_n_lists",
                    "cand_best_cos", "cos_minus_cand_best", "is_cand_best",
-                   "name_tset", "addr_tset", "nums_jacc", "compact_eq", "key_tset"]
+                   "name_tset", "addr_tset", "nums_jacc", "compact_eq", "key_tset",
+                   "via_addr_key", "via_compact", "via_empty_addr",
+                   "q_key_freq", "c_key_other_s1", "c_addr_other_s1"]
 from ber.io import load_ground_truth, load_source
 from ber.metrics import macro_f05, report
 

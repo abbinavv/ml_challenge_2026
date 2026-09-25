@@ -14,6 +14,12 @@ Groups:
                  records resemble each other, so a candidate similar to the entity's
                  strongest candidate, or sharing its exact name/numbers with other
                  candidates in the list, is more likely a true match
+  * rarity     : how many Source-1 entities share this exact name / address. A rare
+                 name or unique address is strong evidence (trade names, empty
+                 addresses); a candidate whose name/address exactly equals ANOTHER
+                 entity's is probably that entity's record (look-alike decoys)
+  * form       : legal-form conflict (Private Limited vs LLP), content words added or
+                 missing beyond generic descriptors ('Vijay Hospitality Steel')
 """
 
 from multiprocessing import Pool
@@ -35,12 +41,16 @@ FEATURES = [
     "cand_addr_empty", "cand_is_s3", "cand_non_latin",
     "top_name_tset", "top_addr_tset", "top_nums_eq", "n_same_compact", "n_same_nums",
     "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy",
+    "legal_conflict", "legal_both", "key_extra", "key_missing",
+    "q_key_freq", "c_key_s1_freq", "c_key_other_s1", "q_addr_freq", "c_addr_s1_freq", "c_addr_other_s1",
+    "via_addr_key", "via_compact", "via_empty_addr",
 ]
 
 _STRING_NAMES = ["name_tset", "name_tsort", "name_ratio", "name_partial", "compact_jw",
                  "compact_eq", "name_jacc", "core_len_diff", "addr_tset", "addr_ratio",
                  "nums_jacc", "nums_conflict", "nums_q",
-                 "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy"]
+                 "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy",
+                 "legal_conflict", "legal_both", "key_extra", "key_missing"]
 
 # Features that need blocking over ALL S1 queries of a split (see add_group_features).
 COMPETITION_FEATURES = {"cand_n_lists", "cand_best_cos", "cos_minus_cand_best", "is_cand_best"}
@@ -68,7 +78,31 @@ def _near_numbers(qs, cs):
                 return True
             if abs(int(a) - int(b)) <= 2:
                 return True
+            if len(a) == len(b) >= 3 and sum(x != y for x, y in zip(a, b)) == 1:
+                return True     # one digit mistyped ('10834' vs '60834')
     return False
+
+
+from .normalize import fold
+
+# Legal-form families (letter-folded like the name tokens). Two names whose forms
+# fall in different families ('Private Limited' vs 'LLP') are a warning sign.
+_LEGAL_FAMILY = {fold(w): fam for fam, words in {
+    "pvt": ["private", "pvt"], "ltd": ["limited", "ltd"], "llp": ["llp"],
+    "inc": ["inc", "incorporated"], "llc": ["llc"], "pllc": ["pllc"], "corp": ["corp", "corporation"],
+    "co": ["co", "company"], "sarl": ["sarl"], "sas": ["sas", "sasu"], "eurl": ["eurl"], "sa": ["sa"],
+}.items() for w in words}
+
+
+def _legal(norm):
+    """Legal-form families present in a normalised name."""
+    return {_LEGAL_FAMILY[t] for t in norm.split() if t in _LEGAL_FAMILY}
+
+
+def _unmatched_words(a, b):
+    """Words of key-name `a` with no exact or typo-level (ratio >= 80) match in `b`."""
+    bs = b.split()
+    return sum(1 for t in a.split() if t not in bs and not any(fuzz.ratio(t, u) >= 80 for u in bs))
 
 
 def _acronym(q_core, c_compact):
@@ -102,15 +136,50 @@ def _string_feats(rows):
             float(_acronym(qc, ck) or _acronym(cc, qk)),
             fuzz.token_set_ratio(qakey, cakey),
             float(not (qs & cs) and _near_numbers(qs, cs)),
+            float(bool(lq := _legal(qn)) and bool(lc := _legal(cn)) and not (lq & lc)),
+            float(bool(_legal(qn)) and bool(_legal(cn))),
+            _unmatched_words(ckey, qkey),
+            _unmatched_words(qkey, ckey),
         )
     return out
 
 
+_FREQ_CACHE = {}
+
+
+def _s1_freqs(s1):
+    """Counts of each (country, key name) and (country, address key) among ALL S1."""
+    k = id(s1)
+    if k not in _FREQ_CACHE:
+        _FREQ_CACHE.clear()
+        _FREQ_CACHE[k] = (
+            s1.group_by("country", "name_key").len().rename({"len": "_kf"}),
+            s1.filter(pl.col("addr_key") != "").group_by("country", "addr_key").len().rename({"len": "_af"}),
+        )
+    return _FREQ_CACHE[k]
+
+
+def add_rarity_features(pairs, s1):
+    """How many S1 entities share the query's / the candidate's exact key name and
+    address key; 'other' excludes the query itself."""
+    kf, af = _s1_freqs(s1)
+    pairs = pairs.join(kf.rename({"name_key": "q_name_key", "_kf": "q_key_freq"}), on=["country", "q_name_key"], how="left") \
+                 .join(kf.rename({"name_key": "c_name_key", "_kf": "c_key_s1_freq"}), on=["country", "c_name_key"], how="left") \
+                 .join(af.rename({"addr_key": "q_addr_key", "_af": "q_addr_freq"}), on=["country", "q_addr_key"], how="left") \
+                 .join(af.rename({"addr_key": "c_addr_key", "_af": "c_addr_s1_freq"}), on=["country", "c_addr_key"], how="left")
+    pairs = pairs.with_columns([pl.col(c).fill_null(0) for c in ("q_key_freq", "c_key_s1_freq", "q_addr_freq", "c_addr_s1_freq")])
+    return pairs.with_columns(
+        (pl.col("c_key_s1_freq") - (pl.col("q_name_key") == pl.col("c_name_key")).cast(pl.Int64)).clip(0).alias("c_key_other_s1"),
+        (pl.col("c_addr_s1_freq") - ((pl.col("q_addr_key") == pl.col("c_addr_key")) & (pl.col("c_addr_key") != "")).cast(pl.Int64)).clip(0).alias("c_addr_other_s1"),
+    )
+
+
 def build_pairs(cands, s1, pool):
     """Attach query and candidate fields to candidate pairs (one row per pair)."""
-    q = s1.select(["entity_id"] + FIELDS).rename({f: f"q_{f}" for f in FIELDS} | {"entity_id": "s1_id"})
+    q = s1.select(["entity_id", "country"] + FIELDS).rename({f: f"q_{f}" for f in FIELDS} | {"entity_id": "s1_id"})
     c = pool.select(["entity_id"] + FIELDS).rename({f: f"c_{f}" for f in FIELDS} | {"entity_id": "cand_id"})
-    return cands.join(q, on="s1_id", how="left").join(c, on="cand_id", how="left")
+    pairs = cands.join(q, on="s1_id", how="left").join(c, on="cand_id", how="left")
+    return add_rarity_features(pairs, s1)
 
 
 def add_group_features(cands):
@@ -153,6 +222,9 @@ def compute_features(pairs, workers=10, chunk=50000):
     m = np.vstack(mats) if mats else np.zeros((0, len(_STRING_NAMES)), np.float32)
     pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(_STRING_NAMES)])
     pairs = add_cluster_features(pairs, workers=workers)
+    for flag in ("via_addr_key", "via_compact", "via_empty_addr"):   # set by extra blocking passes
+        if flag not in pairs.columns:
+            pairs = pairs.with_columns(pl.lit(0.0).alias(flag))
     return pairs.with_columns([pl.col(f).cast(pl.Float32) for f in FEATURES if f in pairs.columns])
 
 
