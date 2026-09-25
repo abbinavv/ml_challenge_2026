@@ -15,12 +15,18 @@ import os
 import re
 
 from anyascii import anyascii
+from rapidfuzz import fuzz
 
 # Word dictionary for names written in Indian scripts, learned from training pairs
 # by src/learn_translit.py (e.g. "praivet" -> "private"). Optional: if the file is
 # absent, native-script names fall back to plain transliteration.
 _TRANSLIT_PATH = os.environ.get("BER_TRANSLIT", os.path.join(os.environ.get("BER_CACHE", "cache"), "translit.json"))
 TRANSLIT = json.load(open(_TRANSLIT_PATH, encoding="utf-8")) if os.path.exists(_TRANSLIT_PATH) else {}
+
+# Sound-alike map for transliterated words never seen in training (learn_translit.py).
+_SKEL_PATH = os.path.join(os.environ.get("BER_CACHE", "cache"), "skelmap.json")
+_SK = json.load(open(_SKEL_PATH, encoding="utf-8")) if os.path.exists(_SKEL_PATH) else {}
+SKELMAP, LATIN_VOCAB = _SK.get("map", {}), set(_SK.get("latin_vocab", []))
 
 # ---------------------------------------------------------------------------
 # Names
@@ -92,6 +98,51 @@ def tokens(text):
     return [t for t in _NON_ALNUM.split(text) if t]
 
 
+_VOWELS = str.maketrans("", "", "aeiouy")
+_SOUND = [("ph", "f"), ("sh", "s"), ("ch", "c"), ("th", "t"), ("kh", "k"), ("gh", "g"),
+          ("bh", "b"), ("dh", "d"), ("w", "v"), ("q", "k"), ("c", "k"), ("z", "j"), ("x", "ks"),
+          ("g", "j"), ("m", "n")]
+
+
+def skeleton(word):
+    """Consonant skeleton of a word, for sound-alike matching across spellings and
+    transliterations: 'stores'/'stors' -> 'strs', 'electronics'/'ilektroniks' ->
+    'lktrnks'. All vowels are dropped (including the first letter), sounds that
+    transliteration swaps are merged (m/n, g/j, ph/f, w/v, c/k), repeats collapse."""
+    w = word
+    for a, b in _SOUND:
+        w = w.replace(a, b)
+    out = ""
+    for ch in w.translate(_VOWELS):
+        if ch != out[-1:]:
+            out += ch
+    return out
+
+
+_SKEL_CACHE = {}
+
+
+def sound_alike(word):
+    """Latin word for an unseen transliterated word: among Latin words with the same
+    skeleton, the one spelled most like it (rapidfuzz ratio >= 58), else the word."""
+    if word in _SKEL_CACHE:
+        return _SKEL_CACHE[word]
+    best, score = word, 58.0
+    if len(word) <= 4:                      # too short to map safely ('stil', 'jnrl')
+        _SKEL_CACHE[word] = word
+        return word
+    for cand in SKELMAP.get(skeleton(word), ()):
+        if len(cand) < 4 or not any(v in cand for v in "aeiou"):   # real words only
+            continue
+        if not 0.7 <= len(cand) / len(word) <= 1.6:                 # comparable length ('pharmesi' != 'farms')
+            continue
+        r = fuzz.ratio(word, cand)
+        if r >= score:
+            best, score = cand, r
+    _SKEL_CACHE[word] = best
+    return best
+
+
 def _fix_token(t):
     """Undo OCR-style swaps inside a word: digits inside mostly-letter words
     ('5ervices' -> 'services') and a leading 'l' read for 'I' ('lnc' -> 'inc')."""
@@ -126,6 +177,8 @@ def _name_tokens(text, native):
     toks = [_fix_token(t) for t in tokens(low)]
     if native and TRANSLIT:   # dictionary keys may be raw or letter-folded
         toks = [TRANSLIT.get(t) or TRANSLIT.get(fold(t)) or t for t in toks]
+    if native and SKELMAP:    # unseen words: map by sound to a Latin word ('motrs' -> 'motors')
+        toks = [t if (t in LATIN_VOCAB or t.isdigit() or len(t) < 3) else sound_alike(t) for t in toks]
     toks = [NAME_VARIANTS.get(t, SRI_VARIANTS.get(t, t)) for t in toks
             if t not in HONORIFICS and t not in MARKER_WORDS]
     return _dedupe([fold(t) for t in toks])
@@ -156,6 +209,10 @@ def normalize_name(name):
     core_toks = [t for t in toks if t not in LEGAL_WORDS]
     core = " ".join(core_toks) if core_toks else norm
     key_toks = [t for t in core_toks if t not in DESCRIPTORS]
+    # Removing generic words must not leave a tiny, collision-prone name
+    # ('SI Consultant' and 'Si Group' -> 'si'): keep the core name instead.
+    if not key_toks or (len(key_toks) == 1 and len(key_toks[0]) < 6):
+        key_toks = core_toks
     key = " ".join(key_toks) if key_toks else core
     compact = core.replace(" ", "")
     alt_toks = [t for t in _name_tokens(alt, native) if t not in LEGAL_WORDS] if alt else []
@@ -197,6 +254,7 @@ ADDRESS_NOISE = {
     "door", "house", "hno", "hn", "h", "plot", "block", "blk", "flat", "shop", "floor", "fl",
     "cdp", "county", "city", "district", "dist", "region", "off", "at", "post", "via",
     "ground", "gf", "premises", "twp", "suburban", "urban", "of", "incorporated",
+    "rdc", "rez", "chaussee",
 }
 
 ORDINAL_WORDS = {"first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
@@ -242,6 +300,14 @@ INDIA_STATES = {
     "jammu and kashmir": "jk", "puducherry": "py",
 }
 
+# French regions and the departements that appear in the data -> one region code,
+# so 'Hauts-de-France' and 'Nord' (or 'Nouvelle-Aquitaine' and 'Gironde') agree.
+FRANCE_REGIONS = {
+    "hauts de france": "hdf", "nord": "hdf", "pas de calais": "hdf",
+    "nouvelle aquitaine": "naq", "gironde": "naq",
+    "pays de la loire": "pdl", "loire atlantique": "pdl",
+}
+
 # Generic street-type words: dropped for the address "key", which keeps only the
 # identifying words (street name, locality, city) and numbers.
 ADDRESS_GENERIC = {
@@ -257,7 +323,7 @@ _GLUED = re.compile(r"^([a-z]{1,4})(\d+)$")
 
 def _replace_states(text, country):
     """Map full state names to short codes for the countries we have tables for."""
-    table = US_STATES if country == "US" else INDIA_STATES if country == "India" else None
+    table = {"US": US_STATES, "India": INDIA_STATES, "France": FRANCE_REGIONS}.get(country)
     if not table:
         return text
     for full, code in sorted(table.items(), key=lambda kv: -len(kv[0])):  # "west virginia" before "virginia"

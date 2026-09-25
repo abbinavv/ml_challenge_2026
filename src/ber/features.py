@@ -41,7 +41,7 @@ FEATURES = [
     "cand_addr_empty", "cand_is_s3", "cand_non_latin",
     "top_name_tset", "top_addr_tset", "top_nums_eq", "n_same_compact", "n_same_nums",
     "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy",
-    "legal_conflict", "legal_both", "key_extra", "key_missing",
+    "legal_conflict", "legal_both", "key_extra", "key_missing", "skel_tset",
     "q_key_freq", "c_key_s1_freq", "c_key_other_s1", "q_addr_freq", "c_addr_s1_freq", "c_addr_other_s1",
     "via_addr_key", "via_compact", "via_empty_addr",
 ]
@@ -50,7 +50,7 @@ _STRING_NAMES = ["name_tset", "name_tsort", "name_ratio", "name_partial", "compa
                  "compact_eq", "name_jacc", "core_len_diff", "addr_tset", "addr_ratio",
                  "nums_jacc", "nums_conflict", "nums_q",
                  "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy",
-                 "legal_conflict", "legal_both", "key_extra", "key_missing"]
+                 "legal_conflict", "legal_both", "key_extra", "key_missing", "skel_tset"]
 
 # Features that need blocking over ALL S1 queries of a split (see add_group_features).
 COMPETITION_FEATURES = {"cand_n_lists", "cand_best_cos", "cos_minus_cand_best", "is_cand_best"}
@@ -83,7 +83,12 @@ def _near_numbers(qs, cs):
     return False
 
 
-from .normalize import fold
+from .normalize import fold, skeleton
+
+
+def _skel(name):
+    """Space-joined consonant skeletons of a name's words (sound-alike form)."""
+    return " ".join(skeleton(t) for t in name.split())
 
 # Legal-form families (letter-folded like the name tokens). Two names whose forms
 # fall in different families ('Private Limited' vs 'LLP') are a warning sign.
@@ -140,6 +145,7 @@ def _string_feats(rows):
             float(bool(_legal(qn)) and bool(_legal(cn))),
             _unmatched_words(ckey, qkey),
             _unmatched_words(qkey, ckey),
+            fuzz.token_set_ratio(_skel(qc), _skel(cc)),
         )
     return out
 
