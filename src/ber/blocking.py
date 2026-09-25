@@ -45,27 +45,30 @@ def block_country(queries, pool, top_k=20, max_df=0.02, chunk=50000, threads=10,
     log(f"    index built: pool={pool.height:,} queries={queries.height:,} "
         f"vocab={len(vec.vocabulary_):,} ({time.time() - t0:.0f}s)")
 
-    q_ids = queries["entity_id"].to_numpy()
-    p_ids = pool["entity_id"].to_numpy()
-    out_s1, out_c, out_cos, out_rank = [], [], [], []
+    # Collect integer positions only; IDs are attached once at the end as Arrow
+    # strings. (Holding NumPy string arrays of IDs for ~66M pairs took ~6 GB.)
+    out_q, out_p, out_cos, out_rank = [], [], [], []
     t1 = time.time()
     for start in range(0, q_m.shape[0], chunk):
         res = sp_matmul_topn(q_m[start:start + chunk], pool_t, top_n=top_k,
                              threshold=0.0, n_threads=threads, sort=True)
         counts = np.diff(res.indptr)
-        rows = np.repeat(np.arange(res.shape[0]), counts) + start
-        ranks = np.concatenate([np.arange(1, c + 1) for c in counts]) if counts.sum() else np.array([], int)
-        out_s1.append(q_ids[rows])
-        out_c.append(p_ids[res.indices])
+        out_q.append((np.repeat(np.arange(res.shape[0]), counts) + start).astype(np.int32))
+        out_p.append(res.indices.astype(np.int32))
         out_cos.append(res.data.astype(np.float32))
-        out_rank.append(ranks.astype(np.int16))
+        out_rank.append(np.concatenate([np.arange(1, c + 1, dtype=np.int16) for c in counts])
+                        if counts.sum() else np.array([], np.int16))
+        del res
         done = min(start + chunk, q_m.shape[0])
         rate = done / max(time.time() - t1, 1e-9)
         log(f"    {done:,}/{q_m.shape[0]:,} queries  ({rate:,.0f}/s, "
             f"eta {(q_m.shape[0] - done) / rate:.0f}s)")
+    del pool_t, q_m
+    q_idx = pl.Series(np.concatenate(out_q)) if out_q else pl.Series([], dtype=pl.Int32)
+    p_idx = pl.Series(np.concatenate(out_p)) if out_p else pl.Series([], dtype=pl.Int32)
     return pl.DataFrame({
-        "s1_id": np.concatenate(out_s1) if out_s1 else np.array([], str),
-        "cand_id": np.concatenate(out_c) if out_c else np.array([], str),
+        "s1_id": queries["entity_id"].gather(q_idx),
+        "cand_id": pool["entity_id"].gather(p_idx),
         "cos": np.concatenate(out_cos) if out_cos else np.array([], np.float32),
         "rank": np.concatenate(out_rank) if out_rank else np.array([], np.int16),
     })

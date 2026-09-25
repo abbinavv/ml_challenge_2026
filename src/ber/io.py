@@ -41,10 +41,10 @@ def _normalize_chunk(rows):
     """Worker: normalise a chunk of (name, address, country) tuples."""
     out = []
     for name, addr, country in rows:
-        norm, core, compact = normalize_name(name)
-        a_norm, a_nums = normalize_address(addr, country)
+        norm, core, compact, key, alt = normalize_name(name)
+        a_norm, a_nums, a_key = normalize_address(addr, country)
         non_latin = any(ord(ch) > 0x24F for ch in name)
-        out.append((norm, core, compact, a_norm, a_nums, non_latin))
+        out.append((norm, core, compact, key, alt, a_norm, a_nums, a_key, non_latin))
     return out
 
 
@@ -57,7 +57,8 @@ def normalize_records(names, addrs, countries, workers=10, chunk=20000):
     flat = [r for p in parts for r in p]
     return pl.DataFrame(
         flat,
-        schema=["name_norm", "name_core", "name_compact", "addr_norm", "addr_nums", "non_latin"],
+        schema=["name_norm", "name_core", "name_compact", "name_key", "name_alt",
+                "addr_norm", "addr_nums", "addr_key", "non_latin"],
         orient="row",
     )
 

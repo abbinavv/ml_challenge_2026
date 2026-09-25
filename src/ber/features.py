@@ -23,7 +23,8 @@ import polars as pl
 from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
 
-FIELDS = ["name_norm", "name_core", "name_compact", "addr_norm", "addr_nums", "non_latin"]
+FIELDS = ["name_norm", "name_core", "name_compact", "name_key", "name_alt",
+          "addr_norm", "addr_nums", "addr_key", "non_latin"]
 
 FEATURES = [
     "cos", "rank", "cos_gap", "cos_ratio", "n_cands",
@@ -33,7 +34,13 @@ FEATURES = [
     "addr_tset", "addr_ratio", "nums_jacc", "nums_conflict", "nums_q", "nums_c",
     "cand_addr_empty", "cand_is_s3", "cand_non_latin",
     "top_name_tset", "top_addr_tset", "top_nums_eq", "n_same_compact", "n_same_nums",
+    "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy",
 ]
+
+_STRING_NAMES = ["name_tset", "name_tsort", "name_ratio", "name_partial", "compact_jw",
+                 "compact_eq", "name_jacc", "core_len_diff", "addr_tset", "addr_ratio",
+                 "nums_jacc", "nums_conflict", "nums_q",
+                 "key_tset", "key_eq", "alt_tset", "acronym", "addr_key_tset", "nums_fuzzy"]
 
 # Features that need blocking over ALL S1 queries of a split (see add_group_features).
 COMPETITION_FEATURES = {"cand_n_lists", "cand_best_cos", "cos_minus_cand_best", "is_cand_best"}
@@ -47,10 +54,33 @@ def _jacc(a, b):
     return len(sa & sb) / len(sa | sb)
 
 
+def _near_numbers(qs, cs):
+    """True if two different numbers look like the same number with a typo:
+    a digit dropped/added at either end ('731' vs '31', '11850' vs '1185') or
+    off by at most 2 ('14637' vs '14638'). Only numbers of 2+ digits count."""
+    for a in qs:
+        if len(a) < 2:
+            continue
+        for b in cs:
+            if len(b) < 2 or a == b:
+                continue
+            if a.endswith(b) or b.endswith(a) or a.startswith(b) or b.startswith(a):
+                return True
+            if abs(int(a) - int(b)) <= 2:
+                return True
+    return False
+
+
+def _acronym(q_core, c_compact):
+    """True if one name is the initials of the other ('best agro' vs 'ba')."""
+    words = q_core.split()
+    return len(words) >= 2 and "".join(w[0] for w in words) == c_compact
+
+
 def _string_feats(rows):
     """Worker: fuzzy string features for a chunk of pairs (query fields, cand fields)."""
-    out = np.zeros((len(rows), 13), dtype=np.float32)
-    for i, (qn, qc, qk, qa, qnum, cn, cc, ck, ca, cnum) in enumerate(rows):
+    out = np.zeros((len(rows), len(_STRING_NAMES)), dtype=np.float32)
+    for i, (qn, qc, qk, qkey, qa, qnum, qakey, cn, cc, ck, ckey, calt, ca, cnum, cakey) in enumerate(rows):
         qs, cs = set(qnum.split()), set(cnum.split())
         out[i] = (
             fuzz.token_set_ratio(qc, cc),
@@ -66,6 +96,12 @@ def _string_feats(rows):
             len(qs & cs) / len(qs | cs) if (qs or cs) else 0.0,
             float(bool(qs) and bool(cs) and not (qs & cs)),
             len(qs),
+            fuzz.token_set_ratio(qkey, ckey),
+            float(qkey == ckey and qkey != ""),
+            fuzz.token_set_ratio(qc, calt) if calt else 0.0,
+            float(_acronym(qc, ck) or _acronym(cc, qk)),
+            fuzz.token_set_ratio(qakey, cakey),
+            float(not (qs & cs) and _near_numbers(qs, cs)),
         )
     return out
 
@@ -106,17 +142,16 @@ def compute_features(pairs, workers=10, chunk=50000):
     )
 
     # fuzzy string features (parallel)
-    cols = ["q_name_norm", "q_name_core", "q_name_compact", "q_addr_norm", "q_addr_nums",
-            "c_name_norm", "c_name_core", "c_name_compact", "c_addr_norm", "c_addr_nums"]
+    cols = ["q_name_norm", "q_name_core", "q_name_compact", "q_name_key", "q_addr_norm",
+            "q_addr_nums", "q_addr_key",
+            "c_name_norm", "c_name_core", "c_name_compact", "c_name_key", "c_name_alt",
+            "c_addr_norm", "c_addr_nums", "c_addr_key"]
     rows = list(zip(*[pairs[c].fill_null("").to_list() for c in cols]))
     chunks = [rows[i:i + chunk] for i in range(0, len(rows), chunk)]
     with Pool(workers) as pool:
         mats = pool.map(_string_feats, chunks)
-    m = np.vstack(mats) if mats else np.zeros((0, 13), np.float32)
-    names = ["name_tset", "name_tsort", "name_ratio", "name_partial", "compact_jw",
-             "compact_eq", "name_jacc", "core_len_diff", "addr_tset", "addr_ratio",
-             "nums_jacc", "nums_conflict", "nums_q"]
-    pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(names)])
+    m = np.vstack(mats) if mats else np.zeros((0, len(_STRING_NAMES)), np.float32)
+    pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(_STRING_NAMES)])
     pairs = add_cluster_features(pairs, workers=workers)
     return pairs.with_columns([pl.col(f).cast(pl.Float32) for f in FEATURES if f in pairs.columns])
 
