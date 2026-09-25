@@ -175,10 +175,17 @@ def _name_tokens(text, native):
     low = re.sub(r"\bm\s*/\s*s\b", " ", low)  # M/S (Messrs)
     low = low.replace("&", " and ").replace("/", " ")
     toks = [_fix_token(t) for t in tokens(low)]
-    if native and TRANSLIT:   # dictionary keys may be raw or letter-folded
-        toks = [TRANSLIT.get(t) or TRANSLIT.get(fold(t)) or t for t in toks]
-    if native and SKELMAP:    # unseen words: map by sound to a Latin word ('motrs' -> 'motors')
-        toks = [t if (t in LATIN_VOCAB or t.isdigit() or len(t) < 3) else sound_alike(t) for t in toks]
+    if native:
+        out = []
+        for t in toks:
+            m = TRANSLIT.get(t) or TRANSLIT.get(fold(t))       # learned from training pairs
+            if m:
+                out.append(m)
+            elif SKELMAP and not (t in LATIN_VOCAB or t.isdigit() or len(t) < 3):
+                out.append(sound_alike(t))                     # unseen word: map by sound
+            else:
+                out.append(t)
+        toks = out
     toks = [NAME_VARIANTS.get(t, SRI_VARIANTS.get(t, t)) for t in toks
             if t not in HONORIFICS and t not in MARKER_WORDS]
     return _dedupe([fold(t) for t in toks])

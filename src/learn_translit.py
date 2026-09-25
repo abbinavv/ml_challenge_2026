@@ -34,7 +34,10 @@ MIN_SHARE = 0.5     # the top Latin word must account for this share of alignmen
 
 def main():
     # raw transliteration of the native-script side (before any dictionary is applied)
-    s1 = load_source("train", 1).select("entity_id", "name_norm")
+    # Latin side as plain (unfolded) words, the same form as the native side
+    s1 = load_source("train", 1).select("entity_id", "name")
+    s1 = s1.with_columns(pl.col("name").map_elements(
+        lambda n: " ".join(tokens(to_ascii_lower(n))), return_dtype=pl.Utf8).alias("name_norm")).drop("name")
     pool = pl.concat([load_source("train", 2), load_source("train", 3)]) \
         .filter(pl.col("non_latin")).select("entity_id", "name")
     pool = pool.with_columns(pl.col("name").map_elements(
