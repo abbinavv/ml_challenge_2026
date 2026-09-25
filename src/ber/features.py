@@ -10,6 +10,10 @@ Groups:
   * name       : fuzzy scores on the normalised, core and compact name forms
   * address    : token similarity and house/unit number agreement
   * record     : source (S2/S3), native-script name, missing address
+  * cluster    : agreement with the entity's other candidates. A business's true
+                 records resemble each other, so a candidate similar to the entity's
+                 strongest candidate, or sharing its exact name/numbers with other
+                 candidates in the list, is more likely a true match
 """
 
 from multiprocessing import Pool
@@ -28,7 +32,11 @@ FEATURES = [
     "compact_eq", "name_jacc", "core_len_diff",
     "addr_tset", "addr_ratio", "nums_jacc", "nums_conflict", "nums_q", "nums_c",
     "cand_addr_empty", "cand_is_s3", "cand_non_latin",
+    "top_name_tset", "top_addr_tset", "top_nums_eq", "n_same_compact", "n_same_nums",
 ]
+
+# Features that need blocking over ALL S1 queries of a split (see add_group_features).
+COMPETITION_FEATURES = {"cand_n_lists", "cand_best_cos", "cos_minus_cand_best", "is_cand_best"}
 
 
 def _jacc(a, b):
@@ -109,4 +117,39 @@ def compute_features(pairs, workers=10, chunk=50000):
              "compact_eq", "name_jacc", "core_len_diff", "addr_tset", "addr_ratio",
              "nums_jacc", "nums_conflict", "nums_q"]
     pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(names)])
-    return pairs.with_columns([pl.col(f).cast(pl.Float32) for f in FEATURES])
+    pairs = add_cluster_features(pairs, workers=workers)
+    return pairs.with_columns([pl.col(f).cast(pl.Float32) for f in FEATURES if f in pairs.columns])
+
+
+def _top_feats(rows):
+    """Worker: candidate-vs-strongest-candidate similarities for a chunk of pairs."""
+    out = np.zeros((len(rows), 3), dtype=np.float32)
+    for i, (cn, ca, cnum, tn, ta, tnum) in enumerate(rows):
+        out[i] = (fuzz.token_set_ratio(cn, tn), fuzz.token_set_ratio(ca, ta),
+                  float(cnum != "" and cnum == tnum))
+    return out
+
+
+def add_cluster_features(pairs, workers=10, chunk=100000):
+    """Add the cluster-support features. `pairs` must contain whole entities
+    (all candidates of each S1), as produced by chunking on s1_id."""
+    top = pairs.filter(pl.col("rank") == pl.col("rank").min().over("s1_id")) \
+        .unique("s1_id", keep="first") \
+        .select("s1_id", pl.col("c_name_core").alias("t_name"),
+                pl.col("c_addr_norm").alias("t_addr"), pl.col("c_addr_nums").alias("t_nums"))
+    pairs = pairs.join(top, on="s1_id", how="left")
+    cols = ["c_name_core", "c_addr_norm", "c_addr_nums", "t_name", "t_addr", "t_nums"]
+    rows = list(zip(*[pairs[c].fill_null("").to_list() for c in cols]))
+    chunks = [rows[i:i + chunk] for i in range(0, len(rows), chunk)]
+    with Pool(workers) as pool:
+        mats = pool.map(_top_feats, chunks)
+    m = np.vstack(mats) if mats else np.zeros((0, 3), np.float32)
+    pairs = pairs.with_columns(
+        pl.Series("top_name_tset", m[:, 0]), pl.Series("top_addr_tset", m[:, 1]),
+        pl.Series("top_nums_eq", m[:, 2]),
+        (pl.len().over(["s1_id", "c_name_compact"]) - 1).cast(pl.Float32).alias("n_same_compact"),
+        pl.when(pl.col("c_addr_nums") != "")
+          .then(pl.len().over(["s1_id", "c_addr_nums"]) - 1).otherwise(0)
+          .cast(pl.Float32).alias("n_same_nums"),
+    ).drop("t_name", "t_addr", "t_nums")
+    return pairs

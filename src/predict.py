@@ -17,7 +17,7 @@ sys.path.insert(0, "src")
 import lightgbm as lgb
 import polars as pl
 
-from ber.decide import select
+from ber.decide import select, select_expected
 from ber.features import add_group_features, build_pairs, compute_features
 from ber.io import load_source, write_id_lists
 
@@ -40,9 +40,18 @@ def score_all(cands, model, feats, s1, pool, chunk_entities=100000):
     return pl.concat(parts)
 
 
-def write_outputs(scored, s1_ids, threshold, out_dir):
-    """Write matching_results.tsv (after one-owner + threshold) and candidate_pairs.tsv."""
-    matches = select(scored, threshold)
+def apply_decision(scored, decision):
+    """Match lists from scored pairs using the decision rule chosen in training."""
+    if decision["method"] == "expected":
+        return select_expected(scored, floor=decision["floor"], empty_weight=decision["empty_weight"])
+    return select(scored, decision["threshold"])
+
+
+def write_outputs(scored, s1_ids, decision, out_dir):
+    """Write matching_results.tsv (one-owner + decision rule) and candidate_pairs.tsv."""
+    if not isinstance(decision, dict):
+        decision = {"method": "threshold", "threshold": float(decision)}
+    matches = apply_decision(scored, decision)
     cands = {s: ids for s, ids in scored.group_by("s1_id").agg("cand_id").iter_rows()}
     write_id_lists(os.path.join(out_dir, "matching_results.tsv"), "matched_entity_ids", s1_ids, matches)
     write_id_lists(os.path.join(out_dir, "candidate_pairs.tsv"), "candidate_entity_ids", s1_ids, cands)
@@ -55,7 +64,9 @@ def main(cands_path, model_dir, out_dir, threshold=None):
     t0 = time.time()
     meta = json.load(open(os.path.join(model_dir, "meta.json")))
     feats = meta["features"]
-    threshold = meta["threshold"] if threshold is None else float(threshold)
+    decision = meta.get("decision", {"method": "threshold", "threshold": meta["threshold"]})
+    if threshold is not None:  # explicit override -> plain threshold rule
+        decision = {"method": "threshold", "threshold": float(threshold)}
     model = lgb.Booster(model_file=os.path.join(model_dir, "model.txt"))
 
     s1 = load_source("test", 1)
@@ -66,8 +77,8 @@ def main(cands_path, model_dir, out_dir, threshold=None):
     scored = score_all(cands, model, feats, s1, pool)
     os.makedirs(out_dir, exist_ok=True)
     scored.write_parquet(os.path.join(out_dir, "scored_pairs.parquet"))
-    write_outputs(scored, s1["entity_id"].to_list(), threshold, out_dir)
-    log(f"done in {time.time()-t0:.0f}s (threshold={threshold})")
+    write_outputs(scored, s1["entity_id"].to_list(), decision, out_dir)
+    log(f"done in {time.time()-t0:.0f}s (decision={decision})")
 
 
 if __name__ == "__main__":

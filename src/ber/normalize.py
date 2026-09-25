@@ -6,9 +6,17 @@ this module is specific to US or India: country only selects extra lookup tables
 where they exist, and unknown countries (e.g. France) fall back to the generic rules.
 """
 
+import json
+import os
 import re
 
 from anyascii import anyascii
+
+# Word dictionary for names written in Indian scripts, learned from training pairs
+# by src/learn_translit.py (e.g. "praivet" -> "private"). Optional: if the file is
+# absent, native-script names fall back to plain transliteration.
+_TRANSLIT_PATH = os.environ.get("BER_TRANSLIT", os.path.join(os.environ.get("BER_CACHE", "cache"), "translit.json"))
+TRANSLIT = json.load(open(_TRANSLIT_PATH, encoding="utf-8")) if os.path.exists(_TRANSLIT_PATH) else {}
 
 # Legal forms and filler words that carry little identity. Covers US, India and
 # French forms; removed to build the "core" name.
@@ -103,11 +111,14 @@ def normalize_name(name):
               'One Logistics Pvt Ltd' and 'onelogistics' can meet
     """
     text = _PAREN_ID.sub(" ", name or "")
+    native = any(ord(ch) > 0x24F for ch in text)
     low = to_ascii_lower(text).strip()
     site = _WEBSITE.match(low)
     if site:
         low = site.group(1).replace("-", " ")
     toks = tokens(low.replace("&", " and "))
+    if native and TRANSLIT:
+        toks = [TRANSLIT.get(t, t) for t in toks]
     norm = " ".join(toks)
     core_toks = [t for t in toks if t not in LEGAL_WORDS]
     core = " ".join(core_toks) if core_toks else norm

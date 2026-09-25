@@ -186,6 +186,17 @@ Each finding below was measured, and each one changes the plan.
 
 ---
 
+## 6b. What is actually built (updated Fri 25 Sep evening)
+
+| Stage | Implementation | Measured |
+|---|---|---|
+| Normalise | `src/ber/normalize.py`: transliteration, legal-form removal, compact names, address abbreviations, US/India state codes (incl. native-script spellings), **learned Indian-script word dictionary** (`src/learn_translit.py`, 517 words from 551K train pairs) | Indian-script name similarity: median 50 -> **100**; dictionary covers 72% of test native-script words (train: 73%) |
+| Block | `src/ber/blocking.py`: **word-token** TF-IDF on core name + address per country, drop words in >2% of pool, top-K | Char 3-grams were 12 h for test; words ~35 min at the same recall |
+| Features | `src/ber/features.py`: 31 features — blocking, competition (needs full query set), name, address, record, **cluster support** | `n_same_nums` enters the top 10 |
+| Model | `src/train_model.py`: LightGBM, entity-level split, per-country report | v1: 0.9402; v2 smoke: 0.9446 |
+| Decide | `src/ber/decide.py`: one-owner rule + global threshold or per-entity expected-F0.5 (chosen on validation) | threshold won on the smoke run |
+| Output | `src/predict.py` + `ber/io.write_id_lists` | validator PASS with `--check-ids` |
+
 ## 7. Execution steps (IST, starting Fri 25 Sep ~17:00)
 
 **Deadline: Sun 27 Sep 23:59 IST.** Uploads: 5 per day (they don't carry over) — use today's.
@@ -194,10 +205,10 @@ Each finding below was measured, and each one changes the plan.
 
 | Step | What | Done when |
 |---|---|---|
-| **1. Data layer** (~1 h) | `src/io.py` + `src/normalize.py`: raw tab-split parser, per-record fields (normalised / core / compact name; normalised address; number set), cached to Parquet for all 7 files | All 7 files cached; row counts match `context.md` |
-| **2. Blocking v1** (~1.5 h) | `src/blocking.py`: per country, combined name+address TF-IDF top-K (K=20) in chunks; write `candidate_pairs.tsv`. **Time the full test run** (F7) | Test candidates written; recall on a train sample logged; runtime known |
-| **3. Scorer + baseline** (~1.5 h) | `src/metrics.py` (official macro F0.5, singleton rule, checked against the 0.714 example); `src/baseline.py`: weighted name/address similarity + one-owner rule, threshold tuned on a train sample | Validation F0.5 logged |
-| **4. Upload #1** (~22:00) | `src/write_output.py` -> validator `--check-ids` -> upload -> `submissions/LOG.md` + git tag `sub-01` | **SCORED on the leaderboard** |
+| ✅ **1. Data layer** (~1 h) | `src/io.py` + `src/normalize.py`: raw tab-split parser, per-record fields (normalised / core / compact name; normalised address; number set), cached to Parquet for all 7 files | All 7 files cached; row counts match `context.md` |
+| ✅ **2. Blocking v1** (~1.5 h) | `src/blocking.py`: per country, combined name+address TF-IDF top-K (K=20) in chunks; write `candidate_pairs.tsv`. **Time the full test run** (F7) | Test candidates written; recall on a train sample logged; runtime known |
+| ✅ **3. Scorer + baseline** (~1.5 h) | `src/metrics.py` (official macro F0.5, singleton rule, checked against the 0.714 example); `src/baseline.py`: weighted name/address similarity + one-owner rule, threshold tuned on a train sample | Validation F0.5 logged |
+| ✅ **4. Upload #1-#2 files** (~22:00) | `src/write_output.py` -> validator `--check-ids` -> upload -> `submissions/LOG.md` + git tag `sub-01` | **SCORED on the leaderboard** |
 
 ### Saturday 26 Sep — the real model
 
