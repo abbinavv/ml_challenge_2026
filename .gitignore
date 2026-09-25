@@ -1,0 +1,43 @@
+# --- Competition data: never commit (2.4 GB; distributed only via Unstop) ---
+dataset/
+student_resource/
+*.tsv
+!tests/fixtures/**/*.tsv
+
+# --- Generated artifacts (large; rebuilt by the pipeline) ---
+*.parquet
+*.npz
+*.npy
+*.pkl
+*.joblib
+cache/
+artifacts/
+models/
+output/
+submissions/*.tsv
+*.zip
+
+# --- Credentials and secrets ---
+.aws/
+.env
+.env.*
+*.pem
+*credentials*
+
+# --- Python environment ---
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- local link to the dataset bundle ---
+data
+
+# --- model artifacts ---
+artifacts/
