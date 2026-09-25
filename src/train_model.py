@@ -71,10 +71,6 @@ def main():
 
     feats = [f for f in FEATURES if args.full or f not in COMPETITION_FEATURES]
     cands = add_group_features(pl.read_parquet(args.cands))  # on the FULL candidate set
-    s1 = load_source("train", 1)
-    pool = pl.concat([load_source("train", 2), load_source("train", 3)])
-    gt, _ = load_ground_truth()
-    country = dict(zip(s1["entity_id"].to_list(), s1["country"].to_list()))
 
     # disjoint entity samples (drawn from all S1 queries, so entities without candidates count too)
     ents = np.array(sorted(cands["s1_id"].unique().to_list()))
@@ -82,6 +78,16 @@ def main():
     rng.shuffle(ents)
     tr_ents = ents[:args.n_train].tolist()
     va_ents = ents[args.n_train:args.n_train + args.n_val].tolist()
+    # keep only the sampled entities' pairs before loading anything else (memory)
+    cands = cands.filter(pl.col("s1_id").is_in(tr_ents + va_ents))
+    del ents
+    import gc; gc.collect()
+    log(f"sampled pairs: {cands.height:,} ({time.time()-t0:.0f}s)")
+
+    s1 = load_source("train", 1)
+    pool = pl.concat([load_source("train", 2), load_source("train", 3)])
+    gt, _ = load_ground_truth()
+    country = dict(zip(s1["entity_id"].to_list(), s1["country"].to_list()))
 
     labels = gt.rename({"match_id": "cand_id"}).with_columns(pl.lit(1).alias("label"))
     def labelled(ids):
