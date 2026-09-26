@@ -1,0 +1,11 @@
+# Runtime dependencies of the pipeline (Python 3.12). Exact versions used for the
+# submitted files; requirements.lock.txt lists the full development environment.
+numpy==2.5.3
+polars==1.44.2
+pyarrow==25.0.1
+scipy==1.18.1
+scikit-learn==1.9.1
+lightgbm==4.7.0
+rapidfuzz==3.14.6
+anyascii==0.3.3
+sparse-dot-topn==1.2.0
