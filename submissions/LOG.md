@@ -103,3 +103,21 @@ python src/finalize.py output/sub06/scored_pairs.parquet artifacts/v6 output/sub
 ```
 Checked and ruled out on 26 Sep: test singleton rate (5.7% vs 5.6% train), Indian-script
 match rate (17.9% vs 18.0%), street agreement, S2/S3 split, conflicting-number-cluster rule.
+
+## Evening 26 Sep: validation error map and rival-feature stacker (sub13, NOT recommended)
+
+v8 validation re-scored locally (src/score_validation.py, reproduces 0.9749). Of 518,632
+true pairs, lost: blocking 10,342 (2.0%), filter 2,541, one-owner 1,053, threshold 14,986 (2.9%).
+Oracles (validation F0.5): no false positives 0.9800; + all shortlisted misses 0.9866;
+perfect on the shortlist 0.9917 (blocking recall 97.5% caps it); perfect 1.0.
+43% of threshold misses are records with a BLANK address; 98% of the "false" blank-address
+same-name candidates are true matches of ANOTHER S1 with the same name (branches), i.e. an
+assignment problem between namesakes. Raw-name fit picks the owner 31% of the time (random 12%).
+No row-order / id leakage (correlations ~0.001).
+
+Stacker (src/ber/rivals.py + src/stack_rivals.py): v8 prob + rival features (fit vs other
+S1s listing the candidate) + list-context features. Half/half validation:
+  @3.3 matches/entity: 0.9744 -> 0.9772;  @3.2 matches/entity: 0.9696 -> 0.9694 (no gain).
+The gain exists only at looser operating points; the leaderboard rewards the strict one
+(test threshold 0.87 vs 0.675 on validation). sub13 (stacked scores, sub08 settings) built
+and PASS, but not recommended: ~80K pairs reshuffled, many near-number look-alikes.
