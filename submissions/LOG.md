@@ -170,3 +170,16 @@ neighbours (validation truth vs test density, src/ber/decide.py number_change_ki
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub17 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664
 ```
 -28,030 neighbour matches (US 24.3K, France 3.7K), +13,830 typo matches; 3.17/entity. PASS.
+
+## sub18 (26 Sep evening): label-free group rules (src/group_rules.py)
+
+Per (country, score band, house-number relation, name-change kind): test true rate =
+validation true pairs per S1 / test pairs per S1. Rescue mid-band (0.8664-0.97) groups with
+test rate >= 0.85 (17 groups, e.g. India same number + trade-name 5,188 pairs ~1.00, US same
+number + name typo 4,910 ~1.00); veto groups with test rate <= 0.5 (e.g. India high band,
+overlapping number + business word added 2,314 pairs 0.006, swapped 3,307 pairs 0.025).
+```
+python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub18 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8
+```
+-6,635 vetoed, +45,917 rescued; 3.19 matches/entity. PASS.

@@ -51,6 +51,9 @@ def main():
                     help="drop matches whose house numbers conflict like a neighbour's (221 vs 225, 19 vs 22)")
     ap.add_argument("--typo-rescue", type=float, default=None, metavar="T",
                     help="also accept pairs with prob >= T whose conflicting numbers look like a typo (0102/102, 1416/1446)")
+    ap.add_argument("--group-rules", default=None, metavar="DIR",
+                    help="directory from src/group_rules.py: rescue mid-band groups that stay true on test, "
+                         "veto groups that are decoys on test")
     ap.add_argument("--country-threshold", nargs="*", default=[], metavar="COUNTRY=T",
                     help="stricter threshold for some countries, e.g. France=0.97")
     a = ap.parse_args()
@@ -106,6 +109,23 @@ def main():
             sel = pl.concat([sel, extra]).unique()
             print(f"typo-number rescue (prob >= {a.typo_rescue}): +{extra.height:,} matches")
 
+    if a.group_rules:
+        tags = pl.read_parquet(os.path.join(a.group_rules, "test_pair_tags.parquet"))
+        rules = pl.read_parquet(os.path.join(a.group_rules, "group_rules.parquet")).select("band", "country", "nc", "nk", "action")
+        probs = owned.select("s1_id", "cand_id", "prob")
+        cty = s1.select(pl.col("entity_id").alias("s1_id"), "country")
+        def ruled(df):
+            d = df.join(probs, on=["s1_id", "cand_id"]).join(cty, on="s1_id").join(tags, on=["s1_id", "cand_id"], how="left")
+            d = d.with_columns(pl.when(pl.col("prob") >= 0.97).then(pl.lit("high")).otherwise(pl.lit("mid")).alias("band"))
+            return d.join(rules, on=["band", "country", "nc", "nk"], how="left")
+        chk = ruled(sel)
+        n_veto = int((chk["action"] == "veto").sum())
+        sel = chk.filter(pl.col("action").fill_null("") != "veto").select("s1_id", "cand_id")
+        pool_mid = owned.filter((pl.col("prob") >= 0.8664) & (pl.col("prob") < thr)).select("s1_id", "cand_id")
+        res = ruled(pool_mid).filter(pl.col("action") == "rescue").select("s1_id", "cand_id")
+        sel = pl.concat([sel, res]).unique()
+        print(f"group rules: -{n_veto:,} vetoed, +{res.height:,} rescued")
+
     if a.legal_veto:
         norms = pl.concat([load_source("test", k).select("entity_id", "name_norm", "name_core") for k in (2, 3)])
         chk = sel.join(s1.select(pl.col("entity_id").alias("s1_id"), "country", pl.col("name_norm").alias("n1")), on="s1_id") \
@@ -158,7 +178,7 @@ def main():
                "candidates_per_entity": sum(len(v) for v in c.values()) / n, "siblings": not a.no_siblings,
                "word_veto": a.word_veto, "vetoed": vetoed,
                "legal_veto": a.legal_veto, "country_threshold": a.country_threshold,
-               "neighbour_veto": a.neighbour_veto, "typo_rescue": a.typo_rescue},
+               "neighbour_veto": a.neighbour_veto, "typo_rescue": a.typo_rescue, "group_rules": a.group_rules},
               open(os.path.join(a.out_dir, "finalize.json"), "w"), indent=2)
     print(f"wrote {a.out_dir}")
 
