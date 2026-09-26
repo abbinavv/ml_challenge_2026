@@ -48,3 +48,18 @@ Conclusion: precision problem on test. The 0.725-0.90 band is 43% house-number
 conflicts (same name + same street, different number: look-alike neighbours), vs 2.9%
 of pairs above 0.97. Next: conflict-aware rule (src/conflict_rule.py) -- exp06_conflict97
 (conflicts need >= 0.97, others 0.725; 3.36/entity) and exp06_conflict995 (>= 0.995; 3.31/entity).
+
+## sub07 (26 Sep) -- v8 model trained on AWS EC2
+
+Model v8: trained on r7i.2xlarge (aws/ec2_train.sh) with house-number-conflict negatives
+weighted x3 (`--conflict-neg-weight 3`), 3573 rounds. Validation F0.5 0.9749
+(P 0.9945, R 0.9442, singletons 0.9707). Test scored on EC2, finalized locally:
+
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub07 --keep 0.99 --target-matches 3.34
+```
+
+- candidate set: keep 99% (filter cut-off 0.0370) -> 5.30 candidates/entity
+- threshold 0.8664 -> 3.34 matches/entity; sibling expansion +25,885 -> 3.35/entity
+- official validator (--check-ids): PASS
+- Public LB: (pending)
