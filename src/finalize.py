@@ -116,12 +116,16 @@ def main():
         cty = s1.select(pl.col("entity_id").alias("s1_id"), "country")
         def ruled(df):
             d = df.join(probs, on=["s1_id", "cand_id"]).join(cty, on="s1_id").join(tags, on=["s1_id", "cand_id"], how="left")
-            d = d.with_columns(pl.when(pl.col("prob") >= 0.97).then(pl.lit("high")).otherwise(pl.lit("mid")).alias("band"))
+            bands = json.load(open(os.path.join(a.group_rules, "bands.json")))
+            band = pl.lit(None, dtype=pl.Int64)
+            for i, (lo, hi) in enumerate(bands):
+                band = pl.when((pl.col("prob") >= lo) & (pl.col("prob") < hi)).then(pl.lit(i)).otherwise(band)
+            d = d.with_columns(band.alias("band"))
             return d.join(rules, on=["band", "country", "nc", "nk"], how="left")
         chk = ruled(sel)
         n_veto = int((chk["action"] == "veto").sum())
         sel = chk.filter(pl.col("action").fill_null("") != "veto").select("s1_id", "cand_id")
-        pool_mid = owned.filter((pl.col("prob") >= 0.8664) & (pl.col("prob") < thr)).select("s1_id", "cand_id")
+        pool_mid = owned.filter(pl.col("prob") < thr).select("s1_id", "cand_id")
         res = ruled(pool_mid).filter(pl.col("action") == "rescue").select("s1_id", "cand_id")
         sel = pl.concat([sel, res]).unique()
         print(f"group rules: -{n_veto:,} vetoed, +{res.height:,} rescued")

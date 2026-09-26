@@ -183,3 +183,18 @@ python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub18 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8
 ```
 -6,635 vetoed, +45,917 rescued; 3.19 matches/entity. PASS.
+
+## sub19 (26 Sep evening): group rules over all score bands (recall)
+
+src/group_rules.py now tags conflicting-number pairs with their change kind and covers
+bands [0.3,0.6), [0.6,0.8664), [0.8664,0.97), [0.97,1]. Band-shift check: for clean groups
+the test pairs fall in the same bands as validation TRUE pairs (US same+identical: 99.98% vs
+99.99% in the top band; US blank+identical: 18/11/4/67% vs 21/11/3/65%), so band-specific
+rates hold. Band-free test rates: blank address + identical name US 0.89 / India 0.95
+(validation 0.75-0.78: test has fewer same-name branches competing for blank records);
+neighbour numbers 0.10-0.44; business word added/swapped 0.00-0.11.
+```
+python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8b
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub19 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8b
+```
+-6,635 vetoed, +100,750 rescued; 3.22 matches/entity. PASS.

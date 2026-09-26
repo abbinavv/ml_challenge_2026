@@ -2,13 +2,14 @@
 
 Usage: python src/group_rules.py <val_scored.parquet> <test_scored_pairs.parquet> <out_dir>
 
-Every pair (owned, prob >= 0.8664) gets a name-change kind (identical, typo, reorder,
+Every pair (owned, prob >= 0.3) gets a name-change kind (identical, typo, reorder,
 drop_word, add_filler, filler_for_word, add_vocab, swap_vocab, swap_other, brand,
-initialism) and a house-number relation (same, overlap, conflict, no_num, blank).
+initialism) and a house-number relation (same, overlap, no_num, blank, or conflict:<change kind>,
+see decide.number_change_kind).
 True variants are generated the same way in train and test, so per group the true
 pairs per S1 measured on validation predict the true pairs per S1 on test; test
 true rate = that / test pairs per S1. Writes <out_dir>/test_pair_tags.parquet and
-<out_dir>/group_rules.parquet: 'rescue' groups (score 0.8664-0.97, test rate >= 0.85)
+<out_dir>/group_rules.parquet: 'rescue' groups (score bands below 0.97, test rate >= 0.85)
 and 'veto' groups (per band, test rate <= 0.5; a group almost absent from validation
     but frequent on test counts as decoys), for US and India. Rescue groups need
 >= 100 validation pairs; all groups >= 500 test pairs.
@@ -20,7 +21,7 @@ import polars as pl
 from rapidfuzz import fuzz
 from ber.io import load_source
 from ber.calibrate import owned
-from ber.decide import FILLER_WORDS, name_vocabulary
+from ber.decide import FILLER_WORDS, name_vocabulary, number_change_kind
 from ber.normalize import fold
 FILL = {fold(w) for w in FILLER_WORDS}
 def build_vocab():
@@ -56,38 +57,42 @@ def nums(n1, n2, e2):
     if a == b: return "same"
     return "overlap" if a & b else "conflict"
 def tag(pairs, split):
-    s1 = load_source(split,1).select(pl.col("entity_id").alias("s1_id"), "country", pl.col("name_core").alias("c1"), pl.col("name_key").alias("k1"), pl.col("addr_nums").alias("n1"))
+    s1 = load_source(split,1).select(pl.col("entity_id").alias("s1_id"), "country", pl.col("name_core").alias("c1"), pl.col("name_key").alias("k1"), pl.col("addr_nums").alias("n1"), pl.col("addr_norm").alias("a1"))
     pool = pl.concat([load_source(split,2),load_source(split,3)]).select(pl.col("entity_id").alias("cand_id"), pl.col("name_core").alias("c2"), pl.col("name_key").alias("k2"),
-                                  pl.col("addr_nums").alias("n2"), (pl.col("addr_norm").fill_null("")=="").alias("e2"))
+                                  pl.col("addr_nums").alias("n2"), (pl.col("addr_norm").fill_null("")=="").alias("e2"), pl.col("addr_norm").alias("a2"))
     d = pairs.join(s1, on="s1_id").join(pool, on="cand_id")
     return d.with_columns(
         pl.struct("country","c1","c2","k1","k2").map_elements(lambda r: name_kind(r["country"], r["c1"], r["c2"], r["k1"], r["k2"]), return_dtype=pl.Utf8).alias("nk"),
-        pl.struct("n1","n2","e2").map_elements(lambda r: nums(r["n1"], r["n2"], r["e2"]), return_dtype=pl.Utf8).alias("nc"))
+        pl.struct("n1","n2","e2","a1","a2").map_elements(lambda r: (lambda c: "conflict:" + number_change_kind(r["a1"], r["a2"]) if c == "conflict" else c)(nums(r["n1"], r["n2"], r["e2"])), return_dtype=pl.Utf8).alias("nc"))
+BANDS = [(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]
+
+
 def main():
     import os
     val_p, test_p, out_dir = sys.argv[1:4]
     os.makedirs(out_dir, exist_ok=True)
-    v = tag(owned(pl.read_parquet(val_p, columns=["s1_id","cand_id","prob","label"])).filter(pl.col("prob")>=0.8664), "train")
-    t = tag(owned(pl.read_parquet(test_p, columns=["s1_id","cand_id","prob"])).filter(pl.col("prob")>=0.8664), "test")
+    v = tag(owned(pl.read_parquet(val_p, columns=["s1_id","cand_id","prob","label"])).filter(pl.col("prob")>=BANDS[0][0]), "train")
+    t = tag(owned(pl.read_parquet(test_p, columns=["s1_id","cand_id","prob"])).filter(pl.col("prob")>=BANDS[0][0]), "test")
     t.select("s1_id","cand_id","nk","nc").write_parquet(os.path.join(out_dir, "test_pair_tags.parquet"))
     rules = []
     n_val = {"US": 90123, "India": 59877}
     n_test = dict(load_source("test",1).group_by("country").len().iter_rows())
-    for lo, hi in ((0.8664, 0.97), (0.97, 1.01)):
+    import json
+    json.dump(BANDS, open(os.path.join(out_dir, "bands.json"), "w"))
+    for band, (lo, hi) in enumerate(BANDS):
         vv = v.filter((pl.col("prob")>=lo)&(pl.col("prob")<hi)); tt = t.filter((pl.col("prob")>=lo)&(pl.col("prob")<hi))
         a = vv.group_by("country","nc","nk").agg(pl.len().alias("v_n"), pl.col("label").mean().round(3).alias("val_rate"), pl.col("label").sum().alias("vt"))
         a = a.with_columns((pl.col("vt")/pl.col("country").replace_strict(n_val, return_dtype=pl.Float64)).alias("tps"))
         b = tt.group_by("country","nc","nk").agg(pl.len().alias("t_n")).with_columns((pl.col("t_n")/pl.col("country").replace_strict(n_test, return_dtype=pl.Float64)).alias("tt"))
         j = b.join(a, on=["country","nc","nk"], how="left").with_columns((pl.col("tps")/pl.col("tt")).round(3).alias("test_rate"))
-        j = j.filter((pl.col("country")!="France") & (pl.col("t_n")>=500) & (pl.col("nc")!="conflict"))
-        band = "mid" if lo < 0.97 else "high"
-        if band == "mid":
+        j = j.filter((pl.col("country")!="France") & (pl.col("t_n")>=500))
+        if hi <= 0.97:
             rules.append(j.filter((pl.col("v_n")>=100) & (pl.col("test_rate")>=0.85)).with_columns(pl.lit("rescue").alias("action"), pl.lit(band).alias("band")))
         rules.append(j.filter(pl.col("test_rate").fill_null(0.0)<=0.5).with_columns(pl.lit("veto").alias("action"), pl.lit(band).alias("band")))
     r = pl.concat([x.with_columns(pl.col(pl.Float64).cast(pl.Float64)) for x in rules], how="diagonal")
     r = r.select("band","country","nc","nk","action","v_n","val_rate","t_n","test_rate")
     r.write_parquet(os.path.join(out_dir, "group_rules.parquet"))
-    with pl.Config(tbl_rows=80): print(r.filter(pl.col("action")=="veto").sort("band","t_n", descending=[False,True]))
+    with pl.Config(tbl_rows=80, tbl_width_chars=200): print(r.sort("action","band","t_n", descending=[False,False,True]))
 if __name__ == "__main__":
     from ber.guard import exclusive
     exclusive("group_rules")
