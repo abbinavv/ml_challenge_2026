@@ -1,7 +1,9 @@
 """Prior-corrected second stage: P_test(true | x) learned from validation labels.
 
-Usage: python src/prior_stack.py <val_scored.parquet> <test_scored_pairs.parquet>
-                                 <test_pair_tags.parquet> <out.parquet>
+Usage: python src/prior_stack.py <val_scored.parquet>[,<more.parquet>...] <test_scored_pairs.parquet>[,<more>...]
+                                 <test_pair_tags.parquet | -> <out.parquet>
+Several validation files (e.g. cross-fitted halves) are concatenated; several test files are
+averaged (prob, p1). With '-' the test pair tags are computed here.
 
 Validation pairs (held-out entities scored by the first-stage model, owner pairs with
 prob >= 0.3) carry true labels, but their negatives are rarer than on test: test adds
@@ -35,17 +37,28 @@ NUM = ["prob", "p1", "raw_ratio", "addr_ratio", "cand_blank", "s1_blank", "is_s3
 
 
 def main():
-    val_p, test_p, tags_p, out = sys.argv[1:5]
+    val_ps, test_ps, tags_p, out = sys.argv[1].split(","), sys.argv[2].split(","), sys.argv[3], sys.argv[4]
     spec = importlib.util.spec_from_file_location("gr", "src/group_rules.py")
     gr = importlib.util.module_from_spec(spec); spec.loader.exec_module(gr)
     n_test = dict(load_source("test", 1).group_by("country").len().iter_rows())
-    v = owned(pl.read_parquet(val_p, columns=["s1_id", "cand_id", "prob", "p1", "label"])).filter(pl.col("prob") >= 0.3)
+    vall = pl.concat([pl.read_parquet(p, columns=["s1_id", "cand_id", "prob", "p1", "label"]) for p in val_ps])
+    if len(val_ps) == 1 and "val_v8" in val_ps[0]:
+        n_val = N_VAL
+    else:   # every train entity is in some out-of-fold file: count them per country
+        s1c = load_source("train", 1).select(pl.col("entity_id").alias("s1_id"), "country")
+        cand_ents = pl.read_parquet("cache/train_cands_k30_plus.parquet", columns=["s1_id"]).unique()
+        n_val = dict(cand_ents.join(s1c, on="s1_id").group_by("country").len().iter_rows())
+    print(f"validation: {vall['s1_id'].n_unique():,} entities, {vall.height:,} pairs; entity counts {n_val}")
+    v = owned(vall).filter(pl.col("prob") >= 0.3)
     v = describe(v, "train").join(gr.tag(v.select("s1_id", "cand_id", "prob"), "train").select("s1_id", "cand_id", "nc", "nk"), on=["s1_id", "cand_id"])
     v = v.filter(pl.col("country").is_in(LABELLED))
-    t = owned(pl.read_parquet(test_p, columns=["s1_id", "cand_id", "prob", "p1"])).filter(pl.col("prob") >= 0.3)
-    t = describe(t, "test").join(pl.read_parquet(tags_p), on=["s1_id", "cand_id"], how="left").filter(pl.col("country").is_in(LABELLED))
+    ts = [pl.read_parquet(p, columns=["s1_id", "cand_id", "prob", "p1"]) for p in test_ps]
+    t = ts[0] if len(ts) == 1 else pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean())
+    t = owned(t).filter(pl.col("prob") >= 0.3)
+    tags = gr.tag(t.select("s1_id", "cand_id", "prob"), "test").select("s1_id", "cand_id", "nc", "nk") if tags_p == "-" else pl.read_parquet(tags_p)
+    t = describe(t, "test").join(tags, on=["s1_id", "cand_id"], how="left").filter(pl.col("country").is_in(LABELLED))
     # group weights for validation negatives
-    nv = pl.col("country").replace_strict(N_VAL, return_dtype=pl.Float64)
+    nv = pl.col("country").replace_strict(n_val, return_dtype=pl.Float64)
     nt = pl.col("country").replace_strict(n_test, return_dtype=pl.Float64)
     a = v.group_by("country", "nc", "nk").agg((pl.col("label") == 1).sum().alias("vt"), (pl.col("label") == 0).sum().alias("vn")) \
          .with_columns((pl.col("vt") / nv).alias("tps"), (pl.col("vn") / nv).alias("nps"))
