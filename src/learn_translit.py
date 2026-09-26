@@ -77,12 +77,6 @@ def main():
         print(f"  {x} -> {table[x]}")
 
 
-if __name__ == "__main__":
-    from ber.guard import exclusive
-    exclusive("learn_translit")
-    main()
-    build_skeleton_map()
-
 
 def build_skeleton_map(min_consonants=3, min_share=0.6, min_count=20):
     """Map UNSEEN transliterated words to Latin words by sound, without labels.
@@ -111,3 +105,10 @@ def build_skeleton_map(min_consonants=3, min_share=0.6, min_count=20):
         json.dump({"latin_vocab": sorted(w for w, c in words.items() if c >= min_count),
                    "map": skelmap}, f, sort_keys=True)
     print(f"skeleton map: {len(skelmap):,} sounds from {len(words):,} Latin words")
+
+
+if __name__ == "__main__":
+    from ber.guard import exclusive
+    exclusive("learn_translit")
+    main()
+    build_skeleton_map()
