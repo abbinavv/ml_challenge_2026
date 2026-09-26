@@ -32,12 +32,16 @@ from ber.domain import describe
 from ber.io import load_source
 
 LABELLED = ["US", "India"]
+# --band-weights: per-band, uncapped negative weights (tried 27 Sep). Default: the per-group,
+# capped weighting that produced sub26 (leaderboard 0.967148).
+BAND_WEIGHTS = "--band-weights" in sys.argv
 N_VAL = {"US": 90123, "India": 59877}
 NUM = ["prob", "p1", "raw_ratio", "addr_ratio", "cand_blank", "s1_blank", "is_s3", "len_diff"]
 
 
 def main():
-    val_ps, test_ps, tags_p, out = sys.argv[1].split(","), sys.argv[2].split(","), sys.argv[3], sys.argv[4]
+    args = [x for x in sys.argv[1:] if not x.startswith("--")]
+    val_ps, test_ps, tags_p, out = args[0].split(","), args[1].split(","), args[2], args[3]
     spec = importlib.util.spec_from_file_location("gr", "src/group_rules.py")
     gr = importlib.util.module_from_spec(spec); spec.loader.exec_module(gr)
     n_test = dict(load_source("test", 1).group_by("country").len().iter_rows())
@@ -57,30 +61,42 @@ def main():
     t = owned(t).filter(pl.col("prob") >= 0.3)
     tags = gr.tag(t.select("s1_id", "cand_id", "prob"), "test").select("s1_id", "cand_id", "nc", "nk") if tags_p == "-" else pl.read_parquet(tags_p)
     t = describe(t, "test").join(tags, on=["s1_id", "cand_id"], how="left").filter(pl.col("country").is_in(LABELLED))
-    # group weights for validation negatives, per score band: decoys concentrate in the
-    # middle bands (the leaderboard confirmed band-specific group rules, sub22 > sub08),
-    # so band-blind weights under-count them
-    def bandx():
-        e = pl.lit(None, dtype=pl.Int32)
-        for i, (lo, hi) in enumerate([(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]):
-            e = pl.when((pl.col("prob") >= lo) & (pl.col("prob") < hi)).then(pl.lit(i, dtype=pl.Int32)).otherwise(e)
-        return e.alias("band")
-    v = v.with_columns(bandx()); t = t.with_columns(bandx())
-    nv = pl.col("country").replace_strict(n_val, return_dtype=pl.Float64)
-    nt = pl.col("country").replace_strict(n_test, return_dtype=pl.Float64)
-    def weights(keys):
-        a = v.group_by(keys).agg((pl.col("label") == 1).sum().alias("vt"), (pl.col("label") == 0).sum().alias("vn")) \
+    if BAND_WEIGHTS:
+        # group weights for validation negatives, per score band: decoys concentrate in the
+        # middle bands (the leaderboard confirmed band-specific group rules, sub22 > sub08),
+        # so band-blind weights under-count them
+        def bandx():
+            e = pl.lit(None, dtype=pl.Int32)
+            for i, (lo, hi) in enumerate([(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]):
+                e = pl.when((pl.col("prob") >= lo) & (pl.col("prob") < hi)).then(pl.lit(i, dtype=pl.Int32)).otherwise(e)
+            return e.alias("band")
+        v = v.with_columns(bandx()); t = t.with_columns(bandx())
+        nv = pl.col("country").replace_strict(n_val, return_dtype=pl.Float64)
+        nt = pl.col("country").replace_strict(n_test, return_dtype=pl.Float64)
+        def weights(keys):
+            a = v.group_by(keys).agg((pl.col("label") == 1).sum().alias("vt"), (pl.col("label") == 0).sum().alias("vn")) \
+                 .with_columns((pl.col("vt") / nv).alias("tps"), (pl.col("vn") / nv).alias("nps"))
+            b = t.group_by(keys).agg(pl.len().alias("tn")).with_columns((pl.col("tn") / nt).alias("tt"))
+            g = a.join(b, on=keys, how="left").with_columns(pl.col("tt").fill_null(0.0))
+            g = g.with_columns(((pl.col("tt") - pl.col("tps")).clip(0.0, None) / pl.col("nps")).alias("w"))
+            return g.with_columns(pl.when(pl.col("vn") >= 5).then(pl.col("w")).otherwise(None).alias("w")).select(*keys, "w")
+        fine = weights(["country", "band", "nc", "nk"]).rename({"w": "w_fine"})
+        coarse = weights(["country", "band"]).rename({"w": "w_coarse"})
+        v = v.join(fine, on=["country", "band", "nc", "nk"], how="left").join(coarse, on=["country", "band"], how="left")
+        # no upper cap: groups with few validation negatives need large factors (e.g. US top-band
+        # one-digit neighbours ~130x); a cap makes their decoys look true
+        v = v.with_columns(pl.coalesce("w_fine", "w_coarse", pl.lit(1.0)).clip(0.2, None).alias("w_neg"))
+    else:
+        # the submitted sub26 weighting: per group (band-blind), capped at 60
+        nv = pl.col("country").replace_strict(n_val, return_dtype=pl.Float64)
+        nt = pl.col("country").replace_strict(n_test, return_dtype=pl.Float64)
+        a = v.group_by("country", "nc", "nk").agg((pl.col("label") == 1).sum().alias("vt"), (pl.col("label") == 0).sum().alias("vn")) \
              .with_columns((pl.col("vt") / nv).alias("tps"), (pl.col("vn") / nv).alias("nps"))
-        b = t.group_by(keys).agg(pl.len().alias("tn")).with_columns((pl.col("tn") / nt).alias("tt"))
-        g = a.join(b, on=keys, how="left").with_columns(pl.col("tt").fill_null(0.0))
-        g = g.with_columns(((pl.col("tt") - pl.col("tps")).clip(0.0, None) / pl.col("nps")).alias("w"))
-        return g.with_columns(pl.when(pl.col("vn") >= 5).then(pl.col("w")).otherwise(None).alias("w")).select(*keys, "w")
-    fine = weights(["country", "band", "nc", "nk"]).rename({"w": "w_fine"})
-    coarse = weights(["country", "band"]).rename({"w": "w_coarse"})
-    v = v.join(fine, on=["country", "band", "nc", "nk"], how="left").join(coarse, on=["country", "band"], how="left")
-    # no upper cap: groups with few validation negatives need large factors (e.g. US top-band
-    # one-digit neighbours ~130x); a cap makes their decoys look true
-    v = v.with_columns(pl.coalesce("w_fine", "w_coarse", pl.lit(1.0)).clip(0.2, None).alias("w_neg"))
+        b = t.group_by("country", "nc", "nk").agg(pl.len().alias("tn")).with_columns((pl.col("tn") / nt).alias("tt"))
+        g = a.join(b, on=["country", "nc", "nk"], how="left").with_columns(pl.col("tt").fill_null(0.0))
+        g = g.with_columns(((pl.col("tt") - pl.col("tps")).clip(0.0, None) / pl.col("nps")).alias("w_neg"))
+        g = g.with_columns(pl.when(pl.col("vn") >= 5).then(pl.col("w_neg")).otherwise(None).clip(0.2, 60.0).fill_null(1.0).alias("w_neg"))
+        v = v.join(g.select("country", "nc", "nk", "w_neg"), on=["country", "nc", "nk"], how="left").with_columns(pl.col("w_neg").fill_null(1.0), pl.lit(None, dtype=pl.Int32).alias("band"))
     w = np.where(v["label"].to_numpy() == 1, 1.0, v["w_neg"].to_numpy())
     cats = {c: sorted(set(v[c].drop_nulls().to_list()) | set(t[c].drop_nulls().to_list())) for c in ("nc", "nk")}
 

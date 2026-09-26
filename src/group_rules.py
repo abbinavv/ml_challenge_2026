@@ -54,8 +54,8 @@ def _left_kind(a, b):
     """Kind of the closest pair of numbers that only one side has (overlap:mixed)."""
     from rapidfuzz.distance import DamerauLevenshtein
     best = None
-    for x in a:
-        for y in b:
+    for x in sorted(a):          # sorted: deterministic tie-break (set order is hash-randomised)
+        for y in sorted(b):
             if not (x.isdigit() and y.isdigit()): continue
             d = abs(int(x) - int(y))
             if best is None or d < best[0]: best = (d, x, y)
@@ -70,6 +70,9 @@ def _left_kind(a, b):
 
 
 _DIG = __import__("re").compile(r"\d+")
+# Street agreement split (tried 27 Sep, did not separate the mixed groups; off by default,
+# the submitted rules were built without it). Enable with --street.
+STREET = "--street" in sys.argv
 
 
 def _street_same(a1, a2):
@@ -85,7 +88,7 @@ def _refine(nc, a1, a2):
     for the relations that numbers alone leave ambiguous (far numbers, no numbers)."""
     if nc == "conflict":
         nc = "conflict:" + number_change_kind(a1, a2)
-    if nc in ("conflict:far", "conflict:na", "no_num", "overlap:mixed_far", "overlap:mixed_other"):
+    if STREET and nc in ("conflict:far", "conflict:na", "no_num", "overlap:mixed_far", "overlap:mixed_other"):
         nc = nc + "|" + _street_same(a1, a2)
     return nc
 
@@ -116,7 +119,8 @@ RESCUE_MIN, VETO_MAX = 0.82, 0.74
 
 def main():
     import os
-    val_ps, test_ps, out_dir = sys.argv[1].split(","), sys.argv[2].split(","), sys.argv[3]
+    args = [x for x in sys.argv[1:] if not x.startswith("--")]
+    val_ps, test_ps, out_dir = args[0].split(","), args[1].split(","), args[2]
     os.makedirs(out_dir, exist_ok=True)
     # several validation files (cross-fitted halves) are concatenated; several test files
     # (the halves' test scores) are averaged, so both sides use the same score scale
