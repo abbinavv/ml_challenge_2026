@@ -18,7 +18,8 @@ import lightgbm as lgb
 import polars as pl
 
 from ber.decide import select, select_expected
-from ber.features import add_group_features, build_pairs, compute_features
+from ber.features import (add_group_features, build_pairs, compute_stage1_features,
+                          compute_stage2_features)
 from ber.io import load_source, write_id_lists
 
 
@@ -35,10 +36,13 @@ def score_all(cands, model, feats, s1, pool, stage1=None, chunk_entities=100000)
     for i in range(0, len(ents), chunk_entities):
         t = time.time()
         sub = cands.filter(pl.col("s1_id").is_in(ents[i:i + chunk_entities]))
-        pairs = compute_features(build_pairs(sub, s1, pool))
+        # cascade: cheap features for all blocking candidates -> candidate filter ->
+        # expensive features only for the survivors (the candidate set)
+        pairs = compute_stage1_features(build_pairs(sub, s1, pool))
         if stage1 is not None:
             m1, f1, cut = stage1
             pairs = pairs.filter(pl.Series(m1.predict(pairs.select(f1).to_numpy()) >= cut))
+        pairs = compute_stage2_features(pairs)
         prob = model.predict(pairs.select(feats).to_numpy())
         parts.append(pairs.select("s1_id", "cand_id").with_columns(pl.Series("prob", prob)))
         log(f"  scored {min(i + chunk_entities, len(ents)):,}/{len(ents):,} entities ({time.time()-t:.0f}s)")

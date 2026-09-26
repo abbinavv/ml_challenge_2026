@@ -205,9 +205,48 @@ def add_group_features(cands):
     ).drop("_top")
 
 
-def compute_features(pairs, workers=10, chunk=50000):
-    """Add the per-pair FEATURES to a frame from build_pairs() (group features
-    from add_group_features() must already be present)."""
+# The five string features the candidate filter (stage B) needs; everything else in
+# _STRING_NAMES is only computed for the pairs that survive the filter.
+_CHEAP_NAMES = ["name_tset", "compact_eq", "addr_tset", "nums_jacc", "key_tset"]
+_STRING_COLS = ["q_name_norm", "q_name_core", "q_name_compact", "q_name_key", "q_addr_norm",
+                "q_addr_nums", "q_addr_key",
+                "c_name_norm", "c_name_core", "c_name_compact", "c_name_key", "c_name_alt",
+                "c_addr_norm", "c_addr_nums", "c_addr_key"]
+
+
+def _cheap_feats(rows):
+    """Worker: the cheap string features used by the candidate filter (same formulas
+    as the corresponding entries of _string_feats)."""
+    out = np.zeros((len(rows), len(_CHEAP_NAMES)), dtype=np.float32)
+    for i, (qn, qc, qk, qkey, qa, qnum, qakey, cn, cc, ck, ckey, calt, ca, cnum, cakey) in enumerate(rows):
+        qs, cs = set(qnum.split()), set(cnum.split())
+        out[i] = (
+            fuzz.token_set_ratio(qc, cc),
+            float(qk == ck and qk != ""),
+            fuzz.token_set_ratio(qa, ca),
+            len(qs & cs) / len(qs | cs) if (qs or cs) else 0.0,
+            fuzz.token_set_ratio(qkey, ckey),
+        )
+    return out
+
+
+def _parallel(fn, pairs, n_out, workers, chunk):
+    """Run a row-wise feature worker over the string columns in parallel."""
+    rows = list(zip(*[pairs[c].fill_null("").to_list() for c in _STRING_COLS]))
+    chunks = [rows[i:i + chunk] for i in range(0, len(rows), chunk)]
+    with Pool(workers) as pool:
+        mats = pool.map(fn, chunks)
+    return np.vstack(mats) if mats else np.zeros((0, n_out), np.float32)
+
+
+def _cast(pairs):
+    return pairs.with_columns([pl.col(f).cast(pl.Float32) for f in FEATURES if f in pairs.columns])
+
+
+def compute_stage1_features(pairs, workers=10, chunk=50000):
+    """Cheap features for EVERY blocking candidate: record flags, the five cheap string
+    similarities and the cluster features (which describe the entity's full candidate
+    list, so they must see all candidates). Enough for the candidate filter."""
     pairs = pairs.with_columns(
         (pl.col("c_addr_norm") == "").cast(pl.Float32).alias("cand_addr_empty"),
         pl.col("cand_id").str.starts_with("S3-").cast(pl.Float32).alias("cand_is_s3"),
@@ -215,23 +254,28 @@ def compute_features(pairs, workers=10, chunk=50000):
         (pl.col("c_addr_nums").str.split(" ").list.len()
          * (pl.col("c_addr_nums") != "")).cast(pl.Float32).alias("nums_c"),
     )
-
-    # fuzzy string features (parallel)
-    cols = ["q_name_norm", "q_name_core", "q_name_compact", "q_name_key", "q_addr_norm",
-            "q_addr_nums", "q_addr_key",
-            "c_name_norm", "c_name_core", "c_name_compact", "c_name_key", "c_name_alt",
-            "c_addr_norm", "c_addr_nums", "c_addr_key"]
-    rows = list(zip(*[pairs[c].fill_null("").to_list() for c in cols]))
-    chunks = [rows[i:i + chunk] for i in range(0, len(rows), chunk)]
-    with Pool(workers) as pool:
-        mats = pool.map(_string_feats, chunks)
-    m = np.vstack(mats) if mats else np.zeros((0, len(_STRING_NAMES)), np.float32)
-    pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(_STRING_NAMES)])
+    m = _parallel(_cheap_feats, pairs, len(_CHEAP_NAMES), workers, chunk)
+    pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(_CHEAP_NAMES)])
     pairs = add_cluster_features(pairs, workers=workers)
     for flag in ("via_addr_key", "via_compact", "via_empty_addr"):   # set by extra blocking passes
         if flag not in pairs.columns:
             pairs = pairs.with_columns(pl.lit(0.0).alias(flag))
-    return pairs.with_columns([pl.col(f).cast(pl.Float32) for f in FEATURES if f in pairs.columns])
+    return _cast(pairs)
+
+
+def compute_stage2_features(pairs, workers=10, chunk=50000):
+    """The remaining (expensive) string features, for the candidates that survived
+    the filter only."""
+    m = _parallel(_string_feats, pairs, len(_STRING_NAMES), workers, chunk)
+    pairs = pairs.with_columns([pl.Series(n, m[:, j]) for j, n in enumerate(_STRING_NAMES)
+                                if n not in _CHEAP_NAMES])
+    return _cast(pairs)
+
+
+def compute_features(pairs, workers=10, chunk=50000):
+    """All FEATURES for every pair (stage 1 + stage 2). Used for training, where both
+    the filter and the main model are learned; identical values to the cascade."""
+    return compute_stage2_features(compute_stage1_features(pairs, workers, chunk), workers, chunk)
 
 
 def _top_feats(rows):
