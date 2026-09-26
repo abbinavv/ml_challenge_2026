@@ -12,6 +12,7 @@
 #                             train_ground_truth.tsv
 # Writes model to            s3://<bucket>/artifacts/<name>/  (model.txt, stage1.txt, meta.json, train.log)
 # Stops the instance at the end (shutdown behaviour must be "Stop").
+export HOME="${HOME:-/root}"   # Session Manager "run command" does not set HOME
 set -euo pipefail
 BUCKET=${1:?usage: ec2_train.sh <bucket> [name] [n_train] [n_val] [extra train_model args...]}
 NAME=${2:-v7}
