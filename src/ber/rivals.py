@@ -92,3 +92,48 @@ def context_features(scored, pool):
         (pl.col("_ml") - lo.cast(pl.UInt32)).alias("same_name_lo"))
     out = scored.join(d.select("s1_id", "cand_id", *CONTEXT_FEATURES), on=["s1_id", "cand_id"], how="left")
     return out.with_columns([pl.col(f).cast(pl.Float64) for f in CONTEXT_FEATURES])
+
+
+COHESION_FEATURES = ["hi_name_max", "hi_addr_max", "hi_num_share", "lo_name_max", "lo_addr_max",
+                     "lo_num_share", "num_is_consensus"]
+
+
+def cohesion_features(scored, pool, n_chunks=8, hi=0.9, lo=0.3):
+    """Record-to-record evidence inside each entity's candidate list: how closely a
+    candidate's name / address / house numbers match the entity's OTHER confident
+    candidates (prob >= hi) and its rejected ones (prob < lo). A true variant with a
+    typo coheres with the confident group; a neighbouring business's record coheres
+    with the rejected records of its own business.
+    scored: s1_id, cand_id, prob (owner pairs). pool: entity_id, name_norm, addr_norm, addr_nums."""
+    from rapidfuzz import process
+    p = pool.select(pl.col("entity_id").alias("cand_id"), pl.col("name_norm").fill_null("").alias("nm"),
+                    pl.col("addr_norm").fill_null("").alias("ad"), pl.col("addr_nums").fill_null("").alias("nu"))
+    d = scored.select("s1_id", "cand_id", "prob").join(p, on="cand_id", how="left")
+    d = d.with_columns((pl.col("s1_id").hash() % n_chunks).alias("_c"))
+    parts = []
+    for k in range(n_chunks):
+        x = d.filter(pl.col("_c") == k).drop("_c")
+        y = x.rename({c: c + "_o" for c in ("cand_id", "prob", "nm", "ad", "nu")})
+        j = x.join(y, on="s1_id").filter(pl.col("cand_id") != pl.col("cand_id_o"))
+        j = j.filter((pl.col("prob_o") >= hi) | (pl.col("prob_o") < lo))
+        j = j.with_columns(
+            pl.Series("nr", process.cpdist(j["nm"].to_list(), j["nm_o"].to_list(), scorer=fuzz.ratio, workers=-1), dtype=pl.Float64),
+            pl.Series("ar", process.cpdist(j["ad"].to_list(), j["ad_o"].to_list(), scorer=fuzz.token_set_ratio, workers=-1), dtype=pl.Float64),
+            ((pl.col("nu") != "") & (pl.col("nu") == pl.col("nu_o"))).cast(pl.Float64).alias("same_nu"),
+            (pl.col("prob_o") >= hi).alias("is_hi"))
+        agg = j.group_by("s1_id", "cand_id").agg(
+            pl.col("nr").filter(pl.col("is_hi")).max().alias("hi_name_max"),
+            pl.col("ar").filter(pl.col("is_hi")).max().alias("hi_addr_max"),
+            pl.col("same_nu").filter(pl.col("is_hi")).mean().alias("hi_num_share"),
+            pl.col("nr").filter(~pl.col("is_hi")).max().alias("lo_name_max"),
+            pl.col("ar").filter(~pl.col("is_hi")).max().alias("lo_addr_max"),
+            pl.col("same_nu").filter(~pl.col("is_hi")).mean().alias("lo_num_share"))
+        # consensus house numbers of the confident group
+        cons = x.filter((pl.col("prob") >= hi) & (pl.col("nu") != "")).group_by("s1_id", "nu").len() \
+                .sort("len", descending=True).group_by("s1_id").agg(pl.col("nu").first().alias("cons_nu"))
+        x2 = x.select("s1_id", "cand_id", "nu").join(cons, on="s1_id", how="left") \
+              .with_columns(pl.when(pl.col("cons_nu").is_null() | (pl.col("nu") == "")).then(None)
+                            .otherwise((pl.col("nu") == pl.col("cons_nu")).cast(pl.Float64)).alias("num_is_consensus"))
+        parts.append(x2.select("s1_id", "cand_id", "num_is_consensus").join(agg, on=["s1_id", "cand_id"], how="left"))
+    out = scored.join(pl.concat(parts), on=["s1_id", "cand_id"], how="left")
+    return out.with_columns([pl.col(f).cast(pl.Float64) for f in COHESION_FEATURES])

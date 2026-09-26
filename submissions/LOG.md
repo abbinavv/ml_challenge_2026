@@ -296,3 +296,17 @@ recall 0.9830 -> 0.9876. Predicted leaderboard (anchored sub22 -> sub26): >= 0.6
 python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf.parquet cache/test_pc_cfx.parquet --street --context --n-val-json=cache/crossfit/oof_sample_counts.json
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub31 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfx.parquet --calibrated-min 0.6
 ```
+
+## sub32 (27 Sep ~05:40): + record-to-record cohesion features
+
+ber/rivals.py cohesion_features: per candidate, max name / address similarity and house-number
+agreement with the entity's OTHER confident (prob >= 0.9) and rejected (< 0.3) candidates, and
+whether its number is the confident group's consensus. Out-of-fold test-like: log-loss
+0.0299 -> 0.0215; at pc >= 0.78 precision 0.9967 -> 0.9975, recall 0.9876 -> 0.9914.
+Predicted leaderboard >= 0.6: 0.9693. Ceiling of the decision stage (perfect decisions on the
+scored pairs): predicted 0.9717 -- only 95.8% of true matches reach scored pairs (blocking ~2%,
+filter 0.5%, one-owner 0.2%, first-stage prob < 0.3 ~1.5%).
+```
+python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf.parquet cache/test_pc_cfh.parquet --street --context --cohesion --n-val-json=cache/crossfit/oof_sample_counts.json
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub32 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfh.parquet --calibrated-min 0.6
+```
