@@ -194,6 +194,19 @@ def main():
         pc = per_country[c]
         log(f"  {c}: macro_f05={pc['macro_f05']:.4f} P={pc['pair_precision']:.3f} R={pc['pair_recall']:.3f} n={pc['entities']:,}")
 
+    # Candidate-set size vs score: the organisers rank smaller candidate sets higher,
+    # so measure what stricter shortlist cut-offs cost (same main model, same decision).
+    log("candidate-set size vs score (stricter shortlist cut-offs, same model):")
+    size_table = []
+    for keep in (0.98, 0.985, 0.99, 0.995):
+        t = float(pos[int(len(pos) * (1 - keep))])
+        v2 = va.filter(pl.col("p1") >= t)
+        p2 = (select(v2, decision["threshold"]) if decision["method"] == "threshold"
+              else select_expected(v2, floor=decision["floor"], empty_weight=decision["empty_weight"]))
+        f2 = macro_f05(p2, truths, va_ents)
+        size_table.append({"keep": keep, "cutoff": t, "candidates_per_entity": v2.height / len(va_ents), "macro_f05": f2})
+        log(f"  keep {keep:.1%}: {v2.height / len(va_ents):.2f} candidates/entity -> macro_f05={f2:.4f}")
+
     imp = sorted(zip(feats, model.feature_importance("gain")), key=lambda x: -x[1])
     os.makedirs(args.out_dir, exist_ok=True)
     model.save_model(os.path.join(args.out_dir, "model.txt"), num_iteration=model.best_iteration)
@@ -202,6 +215,7 @@ def main():
             "stage1": {"features": s1_feats, "cutoff": t1, "keep": args.stage1_keep,
                        "candidates_per_entity_val": cands_per_entity},
             "validation": rep, "per_country": per_country, "blocking_recall": recall,
+            "size_vs_score": size_table,
             "decision_options": {str(k): v for k, v in options.items()},
             "threshold_grid": grid, "feature_importance_gain": [(f, float(g)) for f, g in imp]}
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
