@@ -1,5 +1,6 @@
 #!/bin/bash
-# Train the matching model on ALL training entities on an EC2 instance, then stop it.
+# Train the matching model on ALL training entities on an EC2 instance, score the
+# test set, upload model + submission files to S3, then stop the instance.
 #
 # Run on an Amazon Linux 2023 instance whose IAM role can read/write the bucket:
 #   sudo -i
@@ -44,5 +45,13 @@ echo "== $(date) training on up to $NTRAIN train + $NVAL validation entities"
 echo "== $(date) uploading model"
 cp "artifacts/train_$NAME.log" "artifacts/$NAME/train.log"
 aws s3 cp "artifacts/$NAME" "s3://$BUCKET/artifacts/$NAME/" --recursive --only-show-errors
+
+if [ -f cache/test_cands_k30_fr_plus.parquet ]; then
+  echo "== $(date) scoring the test set"
+  .venv/bin/python -u src/predict.py cache/test_cands_k30_fr_plus.parquet "artifacts/$NAME" "output/$NAME" \
+    2>&1 | grep --line-buffered -v "Warning" | tee "output_$NAME.log"
+  cp "output_$NAME.log" "output/$NAME/predict.log"
+  aws s3 cp "output/$NAME" "s3://$BUCKET/output/$NAME/" --recursive --only-show-errors
+fi
 echo "== $(date) done; stopping instance"
 shutdown -h now
