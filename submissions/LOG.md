@@ -139,3 +139,20 @@ both analyses and the leaderboard trend say the 0.87 cut-off is too loose in eve
 | sub15 | global threshold 0.97 (3.18 matches/entity) -- recommended first on 27 Sep |
 | sub11 | global threshold 0.9419 (3.24/entity) |
 | sub10 | France-only threshold 0.97 |
+
+## sub16 (26 Sep evening): per-pair test calibration (domain classifier)
+
+src/domain_adjust.py: classifier separating test pairs from validation pairs (US + India,
+first-stage prob >= 0.3, pair-level features only; entity-level context features were
+removed after they flagged obvious true pairs of decoy-rich businesses). Density ratio
+r = D/(1-D); test-calibrated prob = prob / max(r, 1). Mean calibrated precision by band:
+0.87-0.93: US 0.38 / India 0.52; 0.93-0.97: 0.53 / 0.66; 0.97-0.99: 0.76 / 0.80;
+>0.999: 0.96 (share with r > 2: 0%). France keeps v8 prob with threshold 0.97.
+
+```
+python src/domain_adjust.py cache/val_v8_domain.parquet cache/test_v8_domain.parquet output/v8_raw/scored_pairs.parquet output/v8d/scored_pairs.parquet
+python src/finalize.py output/v8d/scored_pairs.parquet artifacts/v8 output/sub16 --keep 0.99 --threshold 0.77 --country-threshold France=0.97 --word-veto
+```
+3.18 matches/entity; vs sub15 (same count): ~110K pairs swapped each way. PASS.
+Upload order for 27 Sep: sub15 (global 0.97) first; sub16 second if sub15 confirms that
+stricter is better.
