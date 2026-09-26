@@ -258,3 +258,16 @@ python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/su
 ```
 vs sub22: +155,665 / -44,546 matches; 3.29/entity. PASS. France unchanged from sub22.
 Leaderboard 27 Sep ~02:00: top six teams 0.990-0.991.
+
+## Score prediction method (27 Sep, early morning)
+
+Two predictors were checked against the leaderboard (sub08 0.956511, sub22 0.963841):
+- Validation simulation with test-like re-weighted negatives (src/predict_score.py): ranks
+  sub08 above sub22 and prefers ever looser cut-offs, contradicting the leaderboard (tightening
+  won three times). Discarded; so is sub26 (prior-corrected model trained with those weights).
+- Group-density estimator (per group and band: validation true pairs per S1 / test pairs per
+  S1): ranks sub22 above sub08; realised gain = 0.41 x estimated. Anchored predictions:
+  sub15 0.9591, sub19 0.9619, sub21 0.9636, sub22 0.9638 (real), sub24 0.9628, sub26 0.9600.
+  No existing file is predicted to beat sub22.
+Next: sub28 = group rules re-estimated from the EC2 cross-fit (all 2.2M train entities
+out-of-sample, test scored by the same half-models), uploaded only if predicted > 0.9638.

@@ -1,6 +1,6 @@
 """Label-free group rules: which kinds of pairs are true on TEST.
 
-Usage: python src/group_rules.py <val_scored.parquet> <test_scored_pairs.parquet> <out_dir>
+Usage: python src/group_rules.py <val_scored.parquet>[,more] <test_scored_pairs.parquet>[,more] <out_dir>
 
 Every pair (owned, prob >= 0.3) gets a name-change kind (identical, typo, reorder,
 drop_word, add_filler, filler_for_word, add_vocab, swap_vocab, swap_other, brand,
@@ -69,6 +69,27 @@ def _left_kind(a, b):
     return "far"
 
 
+_DIG = __import__("re").compile(r"\d+")
+
+
+def _street_same(a1, a2):
+    """Do the two addresses agree once numbers are removed (street, city, region)?"""
+    x, y = _DIG.sub(" ", a1 or "").split(), _DIG.sub(" ", a2 or "").split()
+    if not x or not y:
+        return "st_na"
+    return "st_same" if fuzz.token_set_ratio(" ".join(x), " ".join(y)) >= 90 else "st_diff"
+
+
+def _refine(nc, a1, a2):
+    """House-number relation, with the change kind for conflicts and street agreement
+    for the relations that numbers alone leave ambiguous (far numbers, no numbers)."""
+    if nc == "conflict":
+        nc = "conflict:" + number_change_kind(a1, a2)
+    if nc in ("conflict:far", "conflict:na", "no_num", "overlap:mixed_far", "overlap:mixed_other"):
+        nc = nc + "|" + _street_same(a1, a2)
+    return nc
+
+
 def nums(n1, n2, e2):
     if e2: return "blank"
     a, b = set((n1 or "").split()), set((n2 or "").split())
@@ -85,7 +106,7 @@ def tag(pairs, split):
     d = pairs.join(s1, on="s1_id").join(pool, on="cand_id")
     return d.with_columns(
         pl.struct("country","c1","c2","k1","k2").map_elements(lambda r: name_kind(r["country"], r["c1"], r["c2"], r["k1"], r["k2"]), return_dtype=pl.Utf8).alias("nk"),
-        pl.struct("n1","n2","e2","a1","a2").map_elements(lambda r: (lambda c: "conflict:" + number_change_kind(r["a1"], r["a2"]) if c == "conflict" else c)(nums(r["n1"], r["n2"], r["e2"])), return_dtype=pl.Utf8).alias("nc"))
+        pl.struct("n1","n2","e2","a1","a2").map_elements(lambda r: _refine(nums(r["n1"], r["n2"], r["e2"]), r["a1"], r["a2"]), return_dtype=pl.Utf8).alias("nc"))
 BANDS = [(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]
 # Macro F0.5 gains from a pair only if its chance of being true exceeds ~F*/(1+0.5^2)
 # ~= 0.78 (F* ~ 0.97). Margins around it absorb estimation noise; groups in between keep
@@ -95,13 +116,24 @@ RESCUE_MIN, VETO_MAX = 0.82, 0.74
 
 def main():
     import os
-    val_p, test_p, out_dir = sys.argv[1:4]
+    val_ps, test_ps, out_dir = sys.argv[1].split(","), sys.argv[2].split(","), sys.argv[3]
     os.makedirs(out_dir, exist_ok=True)
-    v = tag(owned(pl.read_parquet(val_p, columns=["s1_id","cand_id","prob","label"])).filter(pl.col("prob")>=BANDS[0][0]), "train")
-    t = tag(owned(pl.read_parquet(test_p, columns=["s1_id","cand_id","prob"])).filter(pl.col("prob")>=BANDS[0][0]), "test")
+    # several validation files (cross-fitted halves) are concatenated; several test files
+    # (the halves' test scores) are averaged, so both sides use the same score scale
+    vall = pl.concat([pl.read_parquet(p, columns=["s1_id","cand_id","prob","label"]) for p in val_ps])
+    ts = [pl.read_parquet(p, columns=["s1_id","cand_id","prob"]) for p in test_ps]
+    tall = ts[0] if len(ts) == 1 else pl.concat(ts).group_by("s1_id","cand_id").agg(pl.col("prob").mean())
+    v = tag(owned(vall).filter(pl.col("prob")>=BANDS[0][0]), "train")
+    t = tag(owned(tall).filter(pl.col("prob")>=BANDS[0][0]), "test")
     t.select("s1_id","cand_id","nk","nc").write_parquet(os.path.join(out_dir, "test_pair_tags.parquet"))
     rules = []
-    n_val = {"US": 90123, "India": 59877}
+    if len(val_ps) == 1 and "val_v8" in val_ps[0]:
+        n_val = {"US": 90123, "India": 59877}     # the v8 held-out split
+    else:   # cross-fitted: every train entity is in some validation file
+        s1c = load_source("train",1).select(pl.col("entity_id").alias("s1_id"), "country")
+        ents = pl.read_parquet("cache/train_cands_k30_plus.parquet", columns=["s1_id"]).unique()
+        n_val = dict(ents.join(s1c, on="s1_id").group_by("country").len().iter_rows())
+    print("validation entities per country:", n_val)
     n_test = dict(load_source("test",1).group_by("country").len().iter_rows())
     import json
     json.dump(BANDS, open(os.path.join(out_dir, "bands.json"), "w"))
