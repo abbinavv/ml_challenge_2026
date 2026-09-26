@@ -82,7 +82,7 @@ python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/su
 - vetoed 44,515 matches (France 28,472 / India 13,215 / US 2,828) -> 3.33 matches/entity after siblings
 - 2,246 entities become empty (all sampled were decoy-only: likely singletons, now scored 1.0)
 - official validator (--check-ids): PASS
-- Public LB: (pending)
+- Public LB: **0.956511** (best; +0.0084 over exp06_strict 0.948075 = v8 retrain + word-swap veto)
 - Tried and rejected: "conflicting number shared by another candidate" rule (flags 65% of
   true conflicting pairs on train; not discriminative).
 
