@@ -310,3 +310,14 @@ filter 0.5%, one-owner 0.2%, first-stage prob < 0.3 ~1.5%).
 python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf.parquet cache/test_pc_cfh.parquet --street --context --cohesion --n-val-json=cache/crossfit/oof_sample_counts.json
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub32 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfh.parquet --calibrated-min 0.6
 ```
+
+## sub33 (27 Sep ~06:00): second-stage floor 0.3 -> 0.02 (recover low-scored true matches)
+
+~1.5% of true matches had first-stage prob < 0.3 and never reached the second stage. With
+--floor=0.02 (test tags recomputed for low pairs; low band added to band weights) and the
+cohesion model: same-weights comparison vs sub32: E 0.9798 -> 0.9818 at >= 0.7, predicted
+leaderboard 0.9702. Decision-stage ceiling rises (perfect decisions E 0.9851 -> 0.9893).
+```
+python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf_low.parquet cache/test_pc_cfl.parquet --street --context --cohesion --floor=0.02 --n-val-json=cache/crossfit/oof_sample_counts.json
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub33 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfl.parquet --calibrated-min 0.7
+```

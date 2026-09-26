@@ -38,7 +38,8 @@ BAND_WEIGHTS = "--band-weights" in sys.argv
 # --context: add rival features (fit vs other S1s listing the candidate) and list-context
 # features (agreement with the entity's confident / rejected candidates) -- ber/rivals.py
 CONTEXT = "--context" in sys.argv
-COHESION = "--cohesion" in sys.argv     # record-to-record cohesion features (needs --context)
+COHESION = "--cohesion" in sys.argv
+FLOOR = float(next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--floor=")), 0.3))   # lowest first-stage prob scored     # record-to-record cohesion features (needs --context)
 APPLY_TO = next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--apply-to=")), None)
 N_VAL = {"US": 90123, "India": 59877}
 NUM = ["prob", "p1", "raw_ratio", "addr_ratio", "cand_blank", "s1_blank", "is_s3", "len_diff"]
@@ -68,7 +69,7 @@ def main():
         cand_ents = pl.read_parquet("cache/train_cands_k30_plus.parquet", columns=["s1_id"]).unique()
         n_val = dict(cand_ents.join(s1c, on="s1_id").group_by("country").len().iter_rows())
     print(f"validation: {vall['s1_id'].n_unique():,} entities, {vall.height:,} pairs; entity counts {n_val}")
-    v = owned(vall).filter(pl.col("prob") >= 0.3)
+    v = owned(vall).filter(pl.col("prob") >= FLOOR)
     v = describe(v, "train").join(gr.tag(v.select("s1_id", "cand_id", "prob"), "train").select("s1_id", "cand_id", "nc", "nk"), on=["s1_id", "cand_id"])
     v = v.filter(pl.col("country").is_in(LABELLED))
     if CONTEXT:
@@ -83,7 +84,7 @@ def main():
         del allc
     ts = [pl.read_parquet(p, columns=["s1_id", "cand_id", "prob", "p1"]) for p in test_ps]
     t = ts[0] if len(ts) == 1 else pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean())
-    t = owned(t).filter(pl.col("prob") >= 0.3)
+    t = owned(t).filter(pl.col("prob") >= FLOOR)
     tags = gr.tag(t.select("s1_id", "cand_id", "prob"), "test").select("s1_id", "cand_id", "nc", "nk") if tags_p == "-" else pl.read_parquet(tags_p)
     t = describe(t, "test").join(tags, on=["s1_id", "cand_id"], how="left").filter(pl.col("country").is_in(LABELLED))
     if CONTEXT:
@@ -101,7 +102,7 @@ def main():
         # so band-blind weights under-count them
         def bandx():
             e = pl.lit(None, dtype=pl.Int32)
-            for i, (lo, hi) in enumerate([(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]):
+            for i, (lo, hi) in enumerate(([(FLOOR, 0.3)] if FLOOR < 0.3 else []) + [(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]):
                 e = pl.when((pl.col("prob") >= lo) & (pl.col("prob") < hi)).then(pl.lit(i, dtype=pl.Int32)).otherwise(e)
             return e.alias("band")
         v = v.with_columns(bandx()); t = t.with_columns(bandx())
@@ -167,7 +168,7 @@ def main():
         # also score an unlabelled country with the model, encoded as a labelled one
         # (e.g. --apply-to=France:US); its pairs go to <out>_<country>.parquet
         src_c, as_c = APPLY_TO.split(":")
-        ta = owned(pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean()) if len(ts) > 1 else ts[0]).filter(pl.col("prob") >= 0.3)
+        ta = owned(pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean()) if len(ts) > 1 else ts[0]).filter(pl.col("prob") >= FLOOR)
         ta = describe(ta, "test").join(tags, on=["s1_id", "cand_id"], how="left").filter(pl.col("country") == src_c)
         enc = ta.with_columns(pl.lit(as_c).alias("country"))
         ta = ta.with_columns(pl.Series("pc", m.predict(X(enc))))
