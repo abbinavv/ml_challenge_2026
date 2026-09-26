@@ -1,7 +1,7 @@
 # ML Challenge 2026: Business Entity Resolution Solution Template
 
 **Team Name:** Dronaut
-**Team Members:** Nouman Shafique, [member 2], [member 3]
+**Team Members:** Nouman Shafique, Ishan Bag, Abhinav Raj
 **Submission Date:** 27 September 2026
 
 ---
