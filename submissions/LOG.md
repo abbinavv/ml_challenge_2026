@@ -237,6 +237,8 @@ Group-based budget/ranking: FP 0.053, missed 0.145 per S1, estimate 0.9250 vs su
 (sibling expansion re-added 47.7K records the calibrator rejected). Kept as an alternative;
 sub22 stays the lead candidate.
 
+### sub22 leaderboard: **0.963841** (27 Sep 00:00; +0.0073 over sub08; ranking estimator predicted +0.0144, i.e. ~half realised)
+
 ### Upload plan 27 Sep (00:00 onward)
 1. sub22 (best by the group ranking: +0.0144 over sub08 relative).
 2. If sub22 > 0.9565: sub21 / sub23 to test the bars and the continuous calibrator;
