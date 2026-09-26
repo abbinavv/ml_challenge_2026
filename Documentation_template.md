@@ -1,21 +1,23 @@
 # ML Challenge 2026: Business Entity Resolution Solution Template
 
-**Team Name:** [TEAM NAME — to fill]
-**Team Members:** [to fill]
+**Team Name:** Dronaut
+**Team Members:** Nouman Shafique, [member 2], [member 3]
 **Submission Date:** 27 September 2026
 
 ---
 
 ## 1. Executive Summary
 
-We resolve business records with a four-stage pipeline: data cleaning driven by an audit of
-known true matches, per-country word-level TF-IDF blocking on name + address, a LightGBM
-pair classifier on 37 country-agnostic similarity features, and a decision stage that
-applies a one-owner rule and a threshold tuned directly for macro F0.5. Key innovations are
-a word dictionary for Indian-script names learned from the training pairs (name similarity
-of native-script true pairs: median 50 -> 100), cleaning rules chosen by measuring what still
-differs between known matches, and "cluster" and "competition" features that exploit the
-structure of the data (each Source-2/3 record belongs to at most one Source-1 entity).
+We resolve business records with blocking (per-country word TF-IDF plus exact-key passes,
+then a learned candidate filter that keeps 5.3 candidates per Source-1 entity), a two-stage
+LightGBM pair model on 57 country-agnostic features, and a decision stage calibrated to the
+**test** distribution without test labels. The key finding: test contains about twice as
+many look-alike decoys as train (neighbouring businesses: a house number a few doors away,
+one business word swapped, an extra business word). A model tuned on train validation is
+over-confident on them. We measure this shift from pair densities (true variants are
+generated the same way in train and test, so any excess of a pair type on test is decoys),
+turn it into decision rules and a prior-corrected second-stage model, and raised the public
+leaderboard from 0.9356 to **0.9671**.
 
 ---
 
@@ -23,105 +25,153 @@ structure of the data (each Source-2/3 record belongs to at most one Source-1 en
 
 ### 2.1 Problem Analysis
 
-Measured on the full training data (2.2M Source-1 entities, 10.3M Source-2/3 records):
+Measured on the full data (train: 2.2M Source-1 entities, 10.3M Source-2/3 records; test:
+1.73M / 9.97M):
 
 | Finding | Value | Consequence |
 |---|---|---|
-| Matches per Source-1 entity | mean 3.46, max 11 | Most of the score is recall on multi-match entities |
-| Singletons (no match) | 5.6% | Worth 1.0 each only if predicted empty |
+| Matches per Source-1 entity | mean 3.46, max 11 | Recall on multi-match entities matters |
+| Singletons | 5.6% (train and, by our estimate, test) | Worth 1.0 each only if predicted empty |
 | Cross-country matches | 0 | Block within country |
 | Source-2/3 records matched to >1 entity | 0 | One-owner rule |
-| Source-2/3 records matching nothing (decoys) | 26% | Source of false merges |
-| Decoys sharing an exact core name with some entity | 22% | Decoys are look-alikes: address evidence is essential |
-| Test records per Source-1 entity vs train | 5.5-5.8 vs 4.7 | Test likely has more decoys: precision matters even more |
-| Test-only country | France, 15% of test | Features must be country-agnostic |
-| Native-script names (India) | ~12% of India records, 9 scripts | Transliteration alone gives median similarity 50 |
+| Source-2/3 records per Source-1 entity | train 4.7, test 5.8 | Test has ~2x the decoys |
+| Test-only country | France, 15% of test entities | Country-agnostic features; France calibrated separately |
+| Same-name Source-1 entities (branches) | 53-61% share a key name with another | Blank-address records are ambiguous between namesakes |
+| France co-location | 13% of French entities share an address (train 6%) | More neighbouring-business decoys |
+| Native-script names (India) | ~18% of Indian Source-2/3 records, 9 scripts | Learned transliteration dictionary |
 
-Noise observed on known matches: word shuffles, typos, injected accents, legal-suffix swaps,
-website-style names (`0nelogistics.com`), "X trading as Y" names, honorifics (Mr, Smt, Sri),
-OCR-style swaps (`5ervices`, `lnc`, `INIMITA8LE`), duplicated words; addresses with reordered
-parts, abbreviations, missing parts, native-script state names, renamed cities
-(Bombay/Mumbai), and house-number typos (`731` vs `31`, `14637` vs `14638`).
+Noise on known matches: word shuffles, typos (incl. OCR-style l/i, rn/m), injected accents,
+legal-suffix changes, generic filler words replacing a descriptor ('Palma Mining' ->
+'PALMA LLC CENTER'), DBA / trade names, initialisms, and addresses with reordered, missing or
+abbreviated parts, '<NULL>' tokens and leading-zero / digit typos in house numbers.
 
 ### 2.2 Solution Strategy
 
-**Approach Type:** Blocking + Classifier (with rule-based decision layer)
-**Core Innovation:** Audit-driven cleaning + learned Indian-script dictionary + structure-aware
-features (one-owner competition and within-entity cluster agreement).
+**Approach Type:** Blocking + learned candidate filter + gradient-boosted pair classifier +
+label-free test calibration of the decision.
+
+**Core Innovation:** *Density-ratio calibration.* True variants of a business are generated
+by the same process in train and test; test only adds decoys. For any pair type g (score band
+x house-number relation x name-change kind),
+
+    test true rate(g) = [true pairs per Source-1 entity on validation](g) / [pairs per Source-1 entity on test](g)
+
+Types that contain no decoys come out identical on both sides (India: 2.53 vs 2.53 pairs per
+entity above score 0.999), which validates the assumption. The resulting rates drive rescue /
+veto rules and the weights of a prior-corrected second-stage model. No test label is used.
 
 ---
 
 ## 3. Candidate Generation (Blocking)
 
-- **Blocking keys used:** for each country separately, word-token TF-IDF over
-  "core name + normalised address"; each Source-1 record takes its top-30 most similar
-  Source-2/3 records by cosine similarity (sparse matrix product, chunked). Words present in
-  more than 2% of a country's pool are dropped from the index for speed.
-- **Why this design (measured on labelled queries):**
-
-  | Blocking variant | Recall@20 (US) | Speed |
-  |---|---|---|
-  | Name-only char 3-gram | 65.5% | slow |
-  | Name + address char 3-gram | 98.0% | ~12 h for test |
-  | **Name + address word tokens** | **97.8%** | ~35 min for test |
-
-  Name-only blocking fails because many decoys share a business name; adding the address
-  is essential.
-- **Candidate pairs generated:** [to fill: test pairs, ~30 per Source-1 entity]
-- **How we ensured true matches were not lost:** recall measured on held-out training
-  entities after every change; combined name+address text; Indian-script dictionary so
-  native-script names meet their Latin form; top-30 instead of top-20. Measured blocking
-  recall: [to fill].
+- **Normalisation:** anyascii transliteration plus a word dictionary learned from ~50K
+  native-script training matches (positional and consonant-skeleton alignment), a sound-alike
+  map for unseen Indian-script words (built from Source-1 names only), legal-form removal,
+  compact and key names, address abbreviation canonicalisation, state / region codes (incl.
+  French regions and departements), splitting of glued house numbers ('No.301' -> 301).
+- **Blocking keys used:** per-country word TF-IDF over name + address (top-30 neighbours,
+  common-word cut-off max_df 0.02; France without the cut-off, since it removed city names),
+  plus exact-key passes: same address key, same compact name, same name for records with an
+  empty address (keys shared by at most 20 records).
+- **Candidate filter:** a small LightGBM on cheap features keeps 99% of the true matches that
+  blocking found (cut-off measured on held-out entities).
+- **Candidate pairs generated:** 9,186,087 in `candidate_pairs.tsv` = **5.30 per Source-1
+  entity** (blocking before the filter: ~31 per entity).
+- **How you ensured true matches were not lost:** blocking recall measured on held-out train
+  entities: 98.0% of true pairs reach the blocking candidates, 97.5% survive the filter. The
+  remaining misses were analysed (mostly generic names with truncated addresses, or trade
+  names with no shared word); extra key-based passes recovered too few of them (< 0.2 points)
+  to justify the larger candidate set.
 
 ---
 
 ## 4. Matching Model
 
-**Features used (37, none country-specific):**
-- **Name:** token-set / token-sort / plain ratio, partial ratio, Jaro-Winkler on compact
-  form, compact equality, word Jaccard, length difference, key-name (generic words removed)
-  similarity and equality, alternate-name ("trading as") similarity, acronym match
-- **Address:** token-set and plain ratio on normalised address, address-key similarity,
-  house-number Jaccard, number conflict, near-miss numbers (digit dropped / off by <= 2),
-  number counts, missing address
-- **Blocking / competition:** cosine score, rank, gap and ratio to the entity's best
-  candidate, candidate count; how many entities list the candidate and whether this entity
-  is its strongest claimant (soft one-owner rule)
-- **Cluster support:** similarity to the entity's strongest candidate, number of other
-  candidates sharing the same compact name or the same house numbers
-- **Record:** source (S2/S3), native-script name
+**Features used (57, country-agnostic):**
+- Name features: token-set / partial / Jaro-Winkler ratios on normalised, core and compact
+  names; consonant-skeleton similarity; key-name equality; words added / missing; legal-form
+  family conflict; initialism detection.
+- Address features: token-set ratio, house-number Jaccard / conflict / count of shared
+  numbers, address-key similarity, empty-address flags.
+- Other: blocking cosine and rank, gap to the best candidate, how many other Source-1 entities
+  list the candidate (competition), key-name rarity, cluster support (how many of the entity's
+  candidates agree), which blocking pass found the pair.
 
-**Model type:** LightGBM binary classifier (MIT licence), trained on candidate pairs of
-~300K entities, early stopping on a disjoint validation sample; no pretrained models.
+**Model type:** LightGBM, two stages. Stage 1 (cheap features) = candidate filter; stage 2
+(all features) = main model, 127 leaves, 3,573 boosting rounds with early stopping, trained on
+2.0M train entities (entity-level split, 150K held out) on AWS EC2; negatives whose house
+numbers conflict weighted x3.
 
-**Threshold selection method:** one-owner rule (each Source-2/3 record kept only for the
-entity that scores it highest), then the decision rule with the best macro F0.5 on
-validation among (a) a global probability threshold and (b) per-entity expected-F0.5
-selection. Entities with nothing above the bar get an empty list (singleton-safe).
+**Decision stage (test-calibrated):**
+1. One-owner rule (each Source-2/3 record goes to its highest-scoring Source-1 entity).
+2. Base threshold 0.97 on the stage-2 probability. The public leaderboard rose each time the
+   threshold was raised (3.64 -> 3.48 -> 3.34 matches per entity: 0.921 -> 0.937 -> 0.948),
+   and the density calibration showed why: pairs scored 0.87-0.97 are 91-97% true on
+   validation but only ~40-66% true on test.
+3. House-number change types: a digit added or lost, or one digit changed with a big value
+   jump, stays ~95-100% true on test (typo) and is rescued down to 0.8664; one digit changed
+   within 9, a value within 20, or transposed digits fall to 10-50% true on test (neighbouring
+   business) and are rejected in the US and France.
+4. Group rules (`src/group_rules.py`): per (country, score band, house-number relation incl.
+   overlap subset / mixed, name-change kind) the test true rate above; groups >= 0.82 are
+   rescued, groups <= 0.74 rejected (around the F0.5 break-even F*/1.25 ~ 0.78).
+5. Word-swap veto: a candidate that swaps one of the Source-1 name's words for another
+   frequent business word ('Fontaine Club' vs 'Fontaine Amicale') is rejected (0.02% of true
+   train pairs flagged vs 3.3% of French test matches).
+6. Prior-corrected second stage for US and India (`src/prior_stack.py`): a LightGBM trained on
+   the 150K held-out entities (labels) with fine pair features and change kinds, whose
+   negatives are re-weighted per group to test levels (test negatives per entity = test pairs
+   per entity - validation true pairs per entity). It learns P_test(true | pair) and splits
+   groups the rules can only treat as a whole; pairs with P >= 0.85 are kept. France (no
+   labels) keeps steps 1-5, borrowing only US rescue rules for kinds that cannot be another
+   business at the same address.
+7. Sibling expansion: an unclaimed record with the same country, key name and address key as
+   a matched record joins that match (99.9% same business on train truth).
+
+**Threshold selection method:** base threshold from the leaderboard trend and the density
+calibration; rule bars from the F0.5 break-even; the second-stage cut-off from macro F0.5 on
+held-out entities re-weighted to test levels.
 
 ---
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro):** [to fill: final validation score, per country]
+- **F_0.5 Score (macro), validation:** 0.9749 for the v8 model on 150K held-out train entities
+  (precision 0.9945, recall 0.9442; India 0.9705, US 0.9779). Under test-level negative
+  weights (pairs scored >= 0.3), the final decision reaches precision 0.9934, recall 0.9852,
+  vs 0.9929 / 0.9648 for the rule-only decision.
+- **Public leaderboard progression:**
 
-| Version | Change | Validation macro F0.5 |
+| File | Change | Public F0.5 |
 |---|---|---|
-| v1 | baseline: word blocking top-20 + 22 features | 0.9402 |
-| v2 (smoke) | + Indian-script dictionary, cluster features | 0.9446 |
-| v3 (smoke) | + audit-driven cleaning, key/alt/acronym/near-number features | 0.9483 |
-| v3 full | + full-set competition features, top-30 blocking | [to fill] |
+| sub04 | v5 model, 450K entities, threshold 0.70 | 0.935552 |
+| sub06 | cleaning v3, full re-blocking, threshold 0.725 | 0.936795 |
+| exp06 | same scores, threshold 0.45 / 0.90 | 0.920969 / 0.948075 |
+| sub08 | v8 (2.0M entities, EC2) + word-swap veto | 0.956511 |
+| sub22 | test-calibrated decision rules (steps 2-4) | 0.963841 |
+| **sub26** | **+ prior-corrected second stage (step 6)** | **0.967148** |
 
-- **Common false positives (wrong merges):** [to fill after error analysis] — expected:
-  look-alike decoys at the same address with a similar name.
-- **Common false negatives (missed matches):** [to fill] — expected: blocking misses for
-  India, heavily truncated addresses, names reduced to initials.
+- **Common false positives (wrong merges):** neighbouring businesses built to look alike: the
+  same name a few house numbers away (221 vs 225, 19 vs 22), one business word swapped or
+  added at the same address ('Emmanuel Fetes SA' vs 'Emmanuel Amis SA', 'Shiv & Sons' vs
+  'Shiv & Sons Industries'), legal-form changes in France ('Maison Event SARL' vs 'SNC'), and
+  addresses sharing some numbers but not others (3/289 vs 3/290).
+- **Common false negatives (missed matches):** records with a blank address whose name is
+  shared by several Source-1 branches (only 25-43% of such candidates are the entity's own on
+  validation); genuine variants whose house number contains a far-off typo (indistinguishable
+  from a relocated business); and ~2% of true matches that blocking never proposes (generic
+  names with truncated addresses, trade names with no shared word).
 
 ---
 
 ## 6. Conclusion
 
-[to fill — 2-3 sentences]
+A standard blocking + gradient-boosting pipeline reaches 0.975 on train validation but loses
+precision on test, where look-alike decoys are twice as frequent. Measuring that shift from
+pair densities, without labels, and correcting the decision for it (type-specific rules and a
+prior-corrected second stage) was worth +0.031 on the public leaderboard (0.9356 -> 0.9671)
+while keeping 5.3 candidates per entity. The main lesson: when test differs from train,
+validate the decision rule against the target distribution, not only the model.
 
 ---
 
@@ -129,26 +179,30 @@ selection. Entities with nothing above the bar get an empty list (singleton-safe
 
 ### A. Code Artefacts
 
-Code in `code/business_entity_resolution/`; see its `README.md` for the exact end-to-end
-commands (data -> blocking -> matching -> output).
-
-| File | Role |
-|---|---|
-| `src/ber/normalize.py` | Cleaning rules (names, addresses, Indian-script dictionary lookup) |
-| `src/learn_translit.py` | Learns the Indian-script word dictionary from training pairs |
-| `src/ber/blocking.py`, `src/run_blocking.py` | Per-country TF-IDF blocking |
-| `src/ber/features.py` | Pair features |
-| `src/train_model.py` | Training, validation, decision-rule selection |
-| `src/ber/decide.py` | One-owner rule, threshold, expected-F0.5 selection |
-| `src/predict.py` | Test scoring and submission files |
-| `src/ber/metrics.py` | Official macro F0.5 |
+`code/business_entity_resolution/` contains all source (`src/`), `README.md` (exact commands,
+data -> blocking -> matching -> output) and `requirements.txt` (pinned). Entry points in order:
+`build_cache.py`, `learn_translit.py`, `run_blocking.py`, `reblock_country.py`,
+`add_key_candidates.py`, `train_model.py`, `predict.py`, `score_validation.py`,
+`group_rules.py`, `prior_stack.py`, `finalize.py`. Steps from `group_rules.py` onward were
+re-run from saved inputs and reproduce `output/matching_results.tsv` and
+`output/candidate_pairs.tsv` exactly. Note: the submitted second stage was trained with the
+street-agreement split enabled on the validation side only (`prior_stack.py --street`); the
+README reproduces that configuration as submitted.
 
 ### B. Additional Results
 
-Cleaning audit on 71,878 known true pairs:
+Test-calibrated true rates (examples; validation -> test):
 
-| | US before -> after | India before -> after |
+| Pair type (US unless noted) | Validation | Test |
 |---|---|---|
-| Identical core names | 54.4% -> 62.2% | 60.7% -> 70.5% |
-| Identical key names | — -> 66.2% | — -> 76.9% |
-| Name similarity, worst 10% | 78 -> 88 | 74 -> 92 |
+| Score 0.87-0.93, all types | 91-93% | 41-55% |
+| Conflicting house number, one digit changed within 9 | 85% | 18% |
+| Conflicting house number, value within 20 | 80% | 11% |
+| Conflicting house number, digit added or lost | 98% | 94-96% |
+| India, overlapping numbers + business word added (score >= 0.97) | n/a (1 pair) | 0.6% |
+| Blank address, identical name (band-free) | 75-78% | 89-95% |
+
+Tried and rejected (measured): number-cluster rule (flags 65% of true conflicting pairs),
+dropping all conflicting numbers (-0.016 on validation), street-agreement split (no
+separation), rival-feature stacker (gain only at loose cut-offs), label-free domain classifier
+used alone (worse than group rules on the group estimate).
