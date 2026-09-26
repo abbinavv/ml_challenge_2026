@@ -29,7 +29,7 @@ import sys
 sys.path.insert(0, "src")
 import polars as pl
 
-from ber.decide import FILLER_WORDS, foreign_word, name_vocabulary, one_owner
+from ber.decide import FILLER_WORDS, foreign_word, legal_conflict, name_vocabulary, one_owner
 from ber.normalize import fold
 from ber.io import load_source, write_id_lists
 
@@ -44,6 +44,10 @@ def main():
     ap.add_argument("--threshold", type=float, default=None)
     ap.add_argument("--no-siblings", action="store_true")
     ap.add_argument("--word-veto", action="store_true")
+    ap.add_argument("--legal-veto", nargs="*", default=None, metavar="COUNTRY",
+                    help="drop matches whose legal forms conflict, in these countries")
+    ap.add_argument("--country-threshold", nargs="*", default=[], metavar="COUNTRY=T",
+                    help="stricter threshold for some countries, e.g. France=0.97")
     a = ap.parse_args()
 
     meta = json.load(open(os.path.join(a.model_dir, "meta.json")))
@@ -64,6 +68,24 @@ def main():
         thr = a.threshold
     sel = owned.filter(pl.col("prob") >= thr).select("s1_id", "cand_id")
     print(f"threshold {thr:.4f}: {sel.height:,} matches = {sel.height / n:.2f}/entity")
+
+    if a.country_threshold:
+        cthr = {k: float(v) for k, v in (x.split("=") for x in a.country_threshold)}
+        probs = owned.select("s1_id", "cand_id", "prob")
+        chk = sel.join(probs, on=["s1_id", "cand_id"]).join(s1.select(pl.col("entity_id").alias("s1_id"), "country"), on="s1_id")
+        keep = pl.col("prob") >= pl.col("country").replace_strict(cthr, default=0.0, return_dtype=pl.Float64)
+        before = sel.height
+        sel = chk.filter(keep).select("s1_id", "cand_id")
+        print(f"country thresholds {cthr}: -{before - sel.height:,} matches")
+
+    if a.legal_veto:
+        norms = pl.concat([load_source("test", k).select("entity_id", "name_norm", "name_core") for k in (2, 3)])
+        chk = sel.join(s1.select(pl.col("entity_id").alias("s1_id"), "country", pl.col("name_norm").alias("n1")), on="s1_id") \
+                 .join(norms.rename({"entity_id": "cand_id", "name_norm": "n2", "name_core": "c2"}), on="cand_id")
+        chk = chk.with_columns((pl.col("country").is_in(a.legal_veto) & pl.struct("n1", "n2", "c2").map_elements(
+            lambda r: legal_conflict(r["n1"], r["n2"], r["c2"]), return_dtype=pl.Boolean)).alias("veto"))
+        print(f"legal-form veto {a.legal_veto}: -{int(chk['veto'].sum()):,} matches")
+        sel = chk.filter(~pl.col("veto")).select("s1_id", "cand_id")
 
     vetoed = 0
     if a.word_veto:
@@ -106,7 +128,8 @@ def main():
     write_id_lists(os.path.join(a.out_dir, "candidate_pairs.tsv"), "candidate_entity_ids", ids, c)
     json.dump({"keep": a.keep, "cutoff": cut, "threshold": thr, "matches_per_entity": sel.height / n,
                "candidates_per_entity": sum(len(v) for v in c.values()) / n, "siblings": not a.no_siblings,
-               "word_veto": a.word_veto, "vetoed": vetoed},
+               "word_veto": a.word_veto, "vetoed": vetoed,
+               "legal_veto": a.legal_veto, "country_threshold": a.country_threshold},
               open(os.path.join(a.out_dir, "finalize.json"), "w"), indent=2)
     print(f"wrote {a.out_dir}")
 

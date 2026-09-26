@@ -85,3 +85,21 @@ python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/su
 - Public LB: (pending)
 - Tried and rejected: "conflicting number shared by another candidate" rule (flags 65% of
   true conflicting pairs on train; not discriminative).
+
+## Prepared 26 Sep for the 27 Sep uploads (one change each vs sub08, all PASS --check-ids)
+
+| File | Change vs sub08 | Tests |
+|---|---|---|
+| sub09 | + French legal-form veto (-4,839: 'Maison Event SARL' vs 'SNC') | are form changes decoys in France? |
+| sub10 | + France threshold 0.97 (-38,334) | are France's borderline pairs mostly wrong? |
+| sub11 | global target 3.25 matches/entity (thr 0.9419) | has the stricter-is-better trend peaked? |
+| sub12 | v6 scores instead of v8 (same finalize) | did the v8 retrain help on test? |
+
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub09 --keep 0.99 --word-veto --target-matches 3.34 --legal-veto France
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub10 --keep 0.99 --word-veto --target-matches 3.34 --country-threshold France=0.97
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub11 --keep 0.99 --word-veto --target-matches 3.25
+python src/finalize.py output/sub06/scored_pairs.parquet artifacts/v6 output/sub12 --keep 0.99 --word-veto --target-matches 3.34
+```
+Checked and ruled out on 26 Sep: test singleton rate (5.7% vs 5.6% train), Indian-script
+match rate (17.9% vs 18.0%), street agreement, S2/S3 split, conflicting-number-cluster rule.

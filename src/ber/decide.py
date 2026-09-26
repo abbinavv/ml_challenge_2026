@@ -97,3 +97,24 @@ def foreign_word(s1_core, cand_core, vocab, fillers):
         return False
     # a swap, not an appended suffix ('Red Bakery' -> 'Red Bakery Industries' is true)
     return any(len(w) >= 3 and not w.isdigit() and w not in fillers and not seen(w, b) for w in a)
+
+
+# Legal-form families. French neighbours at one address often differ only in the
+# form ('Maison Event SARL' vs 'Maison Event SNC'); true variants keep or drop it.
+LEGAL_FAMILIES = {"pvt": ["private", "pvt"], "ltd": ["limited", "ltd"], "llp": ["llp"],
+                  "inc": ["inc", "incorporated"], "llc": ["llc"], "pllc": ["pllc"],
+                  "corp": ["corp", "corporation"], "sarl": ["sarl"], "sas": ["sas"],
+                  "sasu": ["sasu"], "eurl": ["eurl"], "sa": ["sa"], "sci": ["sci"],
+                  "snc": ["snc"], "ei": ["ei"]}
+
+
+def legal_conflict(s1_norm, cand_norm, cand_core):
+    """Both names carry a legal form and the forms differ. Skipped when the candidate
+    is an initialism ('Piou Club SAS' vs 'PC'), which only looks like a form."""
+    from ber.normalize import fold
+    fam = {fold(w): f for f, ws in LEGAL_FAMILIES.items() for w in ws}
+    if len((cand_core or "").split()) < 2:
+        return False
+    a = {fam[t] for t in (s1_norm or "").split() if t in fam}
+    b = {fam[t] for t in (cand_norm or "").split() if t in fam}
+    return bool(a) and bool(b) and not (a & b)
