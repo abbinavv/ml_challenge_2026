@@ -271,3 +271,16 @@ Two predictors were checked against the leaderboard (sub08 0.956511, sub22 0.963
   No existing file is predicted to beat sub22.
 Next: sub28 = group rules re-estimated from the EC2 cross-fit (all 2.2M train entities
 out-of-sample, test scored by the same half-models), uploaded only if predicted > 0.9638.
+
+## sub28 (27 Sep ~04:30): prior-corrected model on 898K cross-fitted entities -- built, not uploaded
+
+EC2 cross-fit (aws/ec2_crossfit.sh): two half-models (2,473 / 2,691 rounds) each scored the other
+half of train (5.8M pairs each, out-of-sample) and test. prior_stack on 898K entities (all 150K
+sub26 validation entities + 750K random), configured exactly like sub26 (--street validation
+tags, test tags without street). Out-of-fold test-like: log-loss 0.0469 -> 0.0373; at pc >= 0.78
+precision 0.9934 -> 0.9960, recall 0.9852 -> 0.9830.
+Predicted leaderboard (anchored sub22 -> sub26, k = 0.442): >= 0.6: 0.9680; >= 0.85: 0.9669.
+```
+python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf.parquet cache/test_pc_cf.parquet --street --n-val-json=cache/crossfit/oof_sample_counts.json
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub28 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cf.parquet --calibrated-min 0.6
+```

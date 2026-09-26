@@ -46,7 +46,11 @@ def main():
     gr = importlib.util.module_from_spec(spec); spec.loader.exec_module(gr)
     n_test = dict(load_source("test", 1).group_by("country").len().iter_rows())
     vall = pl.concat([pl.read_parquet(p, columns=["s1_id", "cand_id", "prob", "p1", "label"]) for p in val_ps])
-    if len(val_ps) == 1 and "val_v8" in val_ps[0]:
+    nv_flag = [x for x in sys.argv if x.startswith("--n-val-json=")]
+    if nv_flag:     # entity counts of a sampled validation set
+        import json as _json
+        n_val = _json.load(open(nv_flag[0].split("=", 1)[1]))
+    elif len(val_ps) == 1 and "val_v8" in val_ps[0]:
         n_val = N_VAL
     else:   # every train entity is in some out-of-fold file: count them per country
         s1c = load_source("train", 1).select(pl.col("entity_id").alias("s1_id"), "country")
