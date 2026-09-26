@@ -60,3 +60,40 @@ def select_expected(scored, floor=0.0, empty_weight=1.0, owner=True):
     keep = df.filter((pl.col("k") <= pl.col("k_best")) & (pl.col("prob") >= floor)
                      & (pl.col("ef_max") > empty_weight * pl.col("p_empty")))
     return {s1: ids for s1, ids in keep.group_by("s1_id").agg("cand_id").iter_rows()}
+
+
+# Words that sources add to a name without changing the business ('Palma Mining' ->
+# 'PALMA LLC CENTER'). Measured on train truth: these are the candidate-side extra
+# words of true pairs (>= 15 times per 400K pairs); French equivalents are the
+# top candidate-side extra words on French test pairs with a rare-in-S1 profile.
+FILLER_WORDS = {"center", "centre", "services", "service", "partners", "sri", "enterprises",
+                "trading", "one", "sys", "labs", "group", "groupe", "developpement",
+                "associes", "associates", "frs", "freres", "france", "india", "cie"}
+
+
+def name_vocabulary(names_by_country, min_count=100):
+    """{country: set of core-name words used by >= min_count S1 names}."""
+    from collections import Counter
+    vocab = {}
+    for country, names in names_by_country.items():
+        cnt = Counter(w for n in names for w in set((n or "").split()))
+        vocab[country] = {w for w, c in cnt.items() if c >= min_count}
+    return vocab
+
+
+def foreign_word(s1_core, cand_core, vocab, fillers):
+    """True when the candidate swaps one of the S1 name's words for a real business word.
+
+    Neighbouring businesses at the same address differ by one vocabulary word
+    ('Emmanuel Fetes SA' vs 'Emmanuel Amis SA'). True variants only add filler words,
+    typos or transliteration noise, which are not frequent S1 vocabulary words.
+    """
+    from rapidfuzz import fuzz
+    a, b = (s1_core or "").split(), (cand_core or "").split()
+    def seen(w, other):
+        return any(w == y or w.startswith(y) or y.startswith(w) or fuzz.ratio(w, y) >= 75 for y in other)
+    gained = any(len(w) >= 3 and not w.isdigit() and w not in fillers and w in vocab and not seen(w, a) for w in b)
+    if not gained:
+        return False
+    # a swap, not an appended suffix ('Red Bakery' -> 'Red Bakery Industries' is true)
+    return any(len(w) >= 3 and not w.isdigit() and w not in fillers and not seen(w, b) for w in a)

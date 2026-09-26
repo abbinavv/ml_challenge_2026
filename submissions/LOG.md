@@ -63,3 +63,25 @@ python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/su
 - threshold 0.8664 -> 3.34 matches/entity; sibling expansion +25,885 -> 3.35/entity
 - official validator (--check-ids): PASS
 - Public LB: (pending)
+
+## sub08 (26 Sep) -- sub07 + word-swap veto
+
+Finding: France (15% of test, no training labels) has 2x the co-located businesses of
+train (13% of S1 share an address vs 6%; 2.36 pool records per address vs 1.1-1.5).
+Test India/US match train on these statistics and on the mix of accepted pair types.
+Implied from the leaderboard: France scores ~0.80 while India/US hold ~0.975.
+French decoys = a neighbouring business at the same address with one business word
+swapped ('Fontaine Club' vs 'Fontaine Amicale'). True variants only swap in filler words
+(center/services/partners/groupe/...). The veto (src/ber/decide.py foreign_word) flags
+0.02% of true train pairs vs 3.3% of French, 0.5% of Indian, 0.12% of US test matches.
+
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub08 --keep 0.99 --target-matches 3.34 --word-veto
+```
+
+- vetoed 44,515 matches (France 28,472 / India 13,215 / US 2,828) -> 3.33 matches/entity after siblings
+- 2,246 entities become empty (all sampled were decoy-only: likely singletons, now scored 1.0)
+- official validator (--check-ids): PASS
+- Public LB: (pending)
+- Tried and rejected: "conflicting number shared by another candidate" rule (flags 65% of
+  true conflicting pairs on train; not discriminative).
