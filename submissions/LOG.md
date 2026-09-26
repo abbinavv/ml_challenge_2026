@@ -198,3 +198,18 @@ python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub19 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8b
 ```
 -6,635 vetoed, +100,750 rescued; 3.22 matches/entity. PASS.
+
+## sub20 (26 Sep evening): France borrows safe US rescue rules
+
+France has no labels. Its high-band group densities match the US for identical / typo /
+blank-address groups (per 1000 S1: blank+identical 62 vs 61), and the French anomalies are
+explained: initialisms 58 vs 4 are acronyms at the same address ('Sportifs Ecole' -> 'SE'),
+filler swaps are the generator's descriptor-to-filler operation ('Prepa Plomberie SAS' ->
+'Prepa SAS Services'). France borrows US rescue rules only for identical / typo / dropped /
+reordered / filler / initialism names with agreeing, blank or typo-type numbers (not brand or
+swapped-word kinds: 2x more co-located businesses in France).
+```
+python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8c
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub20 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8c
+```
++117,930 rescued (France ~17K), 3.23 matches/entity. PASS.

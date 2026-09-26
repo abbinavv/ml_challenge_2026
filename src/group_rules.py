@@ -91,6 +91,15 @@ def main():
         rules.append(j.filter(pl.col("test_rate").fill_null(0.0)<=0.5).with_columns(pl.lit("veto").alias("action"), pl.lit(band).alias("band")))
     r = pl.concat([x.with_columns(pl.col(pl.Float64).cast(pl.Float64)) for x in rules], how="diagonal")
     r = r.select("band","country","nc","nk","action","v_n","val_rate","t_n","test_rate")
+    # France has no labels. Its true variants follow the same generator (identical names,
+    # typos, dropped / reordered words, filler swaps such as 'Prepa Plomberie SAS' ->
+    # 'Prepa SAS Services'), so it borrows the US rescue rules for those kinds. Kinds that
+    # can be ANOTHER business at the same address (brand, swapped real word) are not
+    # borrowed: France has twice as many co-located businesses as train.
+    safe_nk = ["identical", "typo", "drop_word", "reorder", "filler_for_word", "initialism"]
+    safe_nc = ["same", "blank", "no_num", "conflict:digit_added_or_lost", "conflict:one_digit_sub_big", "conflict:zeros"]
+    fr = r.filter((pl.col("country") == "US") & (pl.col("action") == "rescue") & pl.col("nk").is_in(safe_nk) & pl.col("nc").is_in(safe_nc))
+    r = pl.concat([r, fr.with_columns(pl.lit("France").alias("country"))])
     r.write_parquet(os.path.join(out_dir, "group_rules.parquet"))
     with pl.Config(tbl_rows=80, tbl_width_chars=200): print(r.sort("action","band","t_n", descending=[False,False,True]))
 if __name__ == "__main__":
