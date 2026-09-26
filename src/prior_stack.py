@@ -35,9 +35,15 @@ LABELLED = ["US", "India"]
 # --band-weights: per-band, uncapped negative weights (tried 27 Sep). Default: the per-group,
 # capped weighting that produced sub26 (leaderboard 0.967148).
 BAND_WEIGHTS = "--band-weights" in sys.argv
+# --context: add rival features (fit vs other S1s listing the candidate) and list-context
+# features (agreement with the entity's confident / rejected candidates) -- ber/rivals.py
+CONTEXT = "--context" in sys.argv
 APPLY_TO = next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--apply-to=")), None)
 N_VAL = {"US": 90123, "India": 59877}
 NUM = ["prob", "p1", "raw_ratio", "addr_ratio", "cand_blank", "s1_blank", "is_s3", "len_diff"]
+if "--context" in sys.argv:
+    from ber.rivals import RIVAL_FEATURES as _RF, CONTEXT_FEATURES as _CF
+    NUM = NUM + [f for f in _RF if f not in ("raw_ratio", "cand_blank")] + list(_CF)
 
 
 def main():
@@ -61,11 +67,26 @@ def main():
     v = owned(vall).filter(pl.col("prob") >= 0.3)
     v = describe(v, "train").join(gr.tag(v.select("s1_id", "cand_id", "prob"), "train").select("s1_id", "cand_id", "nc", "nk"), on=["s1_id", "cand_id"])
     v = v.filter(pl.col("country").is_in(LABELLED))
+    if CONTEXT:
+        from ber.rivals import rival_features, context_features
+        s1tr = load_source("train", 1); pooltr = pl.concat([load_source("train", 2), load_source("train", 3)])
+        vall_o = owned(vall)
+        ctx_v = context_features(vall_o.select("s1_id", "cand_id", "prob"), pooltr)
+        allc = pl.read_parquet("cache/train_cands_k30_plus.parquet", columns=["s1_id", "cand_id", "cos"])
+        v = rival_features(v, allc, s1tr, pooltr, n_chunks=4).join(ctx_v.drop("prob"), on=["s1_id", "cand_id"], how="left")
+        del allc
     ts = [pl.read_parquet(p, columns=["s1_id", "cand_id", "prob", "p1"]) for p in test_ps]
     t = ts[0] if len(ts) == 1 else pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean())
     t = owned(t).filter(pl.col("prob") >= 0.3)
     tags = gr.tag(t.select("s1_id", "cand_id", "prob"), "test").select("s1_id", "cand_id", "nc", "nk") if tags_p == "-" else pl.read_parquet(tags_p)
     t = describe(t, "test").join(tags, on=["s1_id", "cand_id"], how="left").filter(pl.col("country").is_in(LABELLED))
+    if CONTEXT:
+        s1te = load_source("test", 1); poolte = pl.concat([load_source("test", 2), load_source("test", 3)])
+        tall_o = owned(ts[0] if len(ts) == 1 else pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean()))
+        ctx_t = context_features(tall_o.select("s1_id", "cand_id", "prob"), poolte)
+        allc = pl.read_parquet("cache/test_cands_k30_fr_plus.parquet", columns=["s1_id", "cand_id", "cos"])
+        t = rival_features(t, allc, s1te, poolte, n_chunks=8).join(ctx_t.drop("prob"), on=["s1_id", "cand_id"], how="left")
+        del allc
     if BAND_WEIGHTS:
         # group weights for validation negatives, per score band: decoys concentrate in the
         # middle bands (the leaderboard confirmed band-specific group rules, sub22 > sub08),

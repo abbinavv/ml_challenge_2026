@@ -284,3 +284,15 @@ Predicted leaderboard (anchored sub22 -> sub26, k = 0.442): >= 0.6: 0.9680; >= 0
 python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf.parquet cache/test_pc_cf.parquet --street --n-val-json=cache/crossfit/oof_sample_counts.json
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub28 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cf.parquet --calibrated-min 0.6
 ```
+
+## sub31 (27 Sep ~05:15): prior-corrected model + rival and list-context features
+
+prior_stack --context adds ber/rivals.py features (fit vs other S1s listing the candidate;
+agreement with the entity's confident / rejected candidates). 898K cross-fitted entities.
+Out-of-fold test-like: log-loss 0.0373 -> 0.0299; at pc >= 0.78 precision 0.9960 -> 0.9967,
+recall 0.9830 -> 0.9876. Predicted leaderboard (anchored sub22 -> sub26): >= 0.6: 0.9687
+(sub28: 0.9680).
+```
+python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf.parquet cache/test_pc_cfx.parquet --street --context --n-val-json=cache/crossfit/oof_sample_counts.json
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub31 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfx.parquet --calibrated-min 0.6
+```
