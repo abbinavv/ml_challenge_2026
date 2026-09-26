@@ -156,3 +156,17 @@ python src/finalize.py output/v8d/scored_pairs.parquet artifacts/v8 output/sub16
 3.18 matches/entity; vs sub15 (same count): ~110K pairs swapped each way. PASS.
 Upload order for 27 Sep: sub15 (global 0.97) first; sub16 second if sub15 confirms that
 stricter is better.
+
+## sub17 (26 Sep evening): house-number change types (label-free, measured)
+
+For pairs whose house numbers conflict, the TYPE of change separates typos from
+neighbours (validation truth vs test density, src/ber/decide.py number_change_kind):
+  band 0.8664-0.97: digit added/lost val 97-98% -> test 95-97%; one digit changed, big jump
+  98-100% -> ~100%; one digit changed within 9: 88-91% -> 11-26%; value within 20: 84-89% -> 9-10%.
+  band >= 0.97 (US): one digit within 9: 99% -> 49%; value within 20: 99.8% -> 58%; na 93% -> 31%.
+  India >= 0.97: 76-77% (break-even, left alone). France: no labels; all French decoys seen
+  were neighbours (19 vs 22, 139 vs 142), so the US rule is applied.
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub17 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664
+```
+-28,030 neighbour matches (US 24.3K, France 3.7K), +13,830 typo matches; 3.17/entity. PASS.

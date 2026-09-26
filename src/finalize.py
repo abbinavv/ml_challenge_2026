@@ -29,7 +29,8 @@ import sys
 sys.path.insert(0, "src")
 import polars as pl
 
-from ber.decide import FILLER_WORDS, foreign_word, legal_conflict, name_vocabulary, one_owner
+from ber.decide import (FILLER_WORDS, NEIGHBOUR_KINDS, TYPO_KINDS, foreign_word, legal_conflict,
+                        name_vocabulary, number_change_kind, one_owner)
 from ber.normalize import fold
 from ber.io import load_source, write_id_lists
 
@@ -46,6 +47,10 @@ def main():
     ap.add_argument("--word-veto", action="store_true")
     ap.add_argument("--legal-veto", nargs="*", default=None, metavar="COUNTRY",
                     help="drop matches whose legal forms conflict, in these countries")
+    ap.add_argument("--neighbour-veto", nargs="*", default=None, metavar="COUNTRY",
+                    help="drop matches whose house numbers conflict like a neighbour's (221 vs 225, 19 vs 22)")
+    ap.add_argument("--typo-rescue", type=float, default=None, metavar="T",
+                    help="also accept pairs with prob >= T whose conflicting numbers look like a typo (0102/102, 1416/1446)")
     ap.add_argument("--country-threshold", nargs="*", default=[], metavar="COUNTRY=T",
                     help="stricter threshold for some countries, e.g. France=0.97")
     a = ap.parse_args()
@@ -77,6 +82,29 @@ def main():
         before = sel.height
         sel = chk.filter(keep).select("s1_id", "cand_id")
         print(f"country thresholds {cthr}: -{before - sel.height:,} matches")
+
+    if a.neighbour_veto is not None or a.typo_rescue is not None:
+        addr = pl.concat([load_source("test", k).select("entity_id", "addr_norm", "addr_nums") for k in (2, 3)])
+        s1a = s1.select(pl.col("entity_id").alias("s1_id"), "country", pl.col("addr_norm").alias("a1"), pl.col("addr_nums").alias("n1"))
+
+        def with_kind(df):
+            d = df.join(s1a, on="s1_id").join(addr.rename({"entity_id": "cand_id", "addr_norm": "a2", "addr_nums": "n2"}), on="cand_id")
+            n1, n2 = pl.col("n1").fill_null(""), pl.col("n2").fill_null("")
+            ov = n1.str.split(" ").list.set_intersection(n2.str.split(" ")).list.len() > 0
+            d = d.with_columns(((n1 != "") & (n2 != "") & ~ov).alias("conflict"))
+            return d.with_columns(pl.when(pl.col("conflict")).then(pl.struct("a1", "a2").map_elements(
+                lambda r: number_change_kind(r["a1"], r["a2"]), return_dtype=pl.Utf8)).otherwise(pl.lit("")).alias("kind"))
+        if a.neighbour_veto:
+            chk = with_kind(sel)
+            bad = pl.col("country").is_in(a.neighbour_veto) & pl.col("kind").is_in(list(NEIGHBOUR_KINDS))
+            print(chk.filter(bad).group_by("country", "kind").len().sort("country", "kind").rows())
+            print(f"neighbour-number veto {a.neighbour_veto}: -{int(chk.select(bad.sum()).item()):,} matches")
+            sel = chk.filter(~bad).select("s1_id", "cand_id")
+        if a.typo_rescue is not None:
+            extra = owned.filter((pl.col("prob") >= a.typo_rescue) & (pl.col("prob") < thr)).select("s1_id", "cand_id")
+            extra = with_kind(extra).filter(pl.col("kind").is_in(list(TYPO_KINDS))).select("s1_id", "cand_id")
+            sel = pl.concat([sel, extra]).unique()
+            print(f"typo-number rescue (prob >= {a.typo_rescue}): +{extra.height:,} matches")
 
     if a.legal_veto:
         norms = pl.concat([load_source("test", k).select("entity_id", "name_norm", "name_core") for k in (2, 3)])
@@ -129,7 +157,8 @@ def main():
     json.dump({"keep": a.keep, "cutoff": cut, "threshold": thr, "matches_per_entity": sel.height / n,
                "candidates_per_entity": sum(len(v) for v in c.values()) / n, "siblings": not a.no_siblings,
                "word_veto": a.word_veto, "vetoed": vetoed,
-               "legal_veto": a.legal_veto, "country_threshold": a.country_threshold},
+               "legal_veto": a.legal_veto, "country_threshold": a.country_threshold,
+               "neighbour_veto": a.neighbour_veto, "typo_rescue": a.typo_rescue},
               open(os.path.join(a.out_dir, "finalize.json"), "w"), indent=2)
     print(f"wrote {a.out_dir}")
 

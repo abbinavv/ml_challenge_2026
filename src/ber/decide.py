@@ -118,3 +118,41 @@ def legal_conflict(s1_norm, cand_norm, cand_core):
     a = {fam[t] for t in (s1_norm or "").split() if t in fam}
     b = {fam[t] for t in (cand_norm or "").split() if t in fam}
     return bool(a) and bool(b) and not (a & b)
+
+
+# House-number change types for pairs whose numbers conflict. Measured on train truth
+# vs test densities (label-free): typos (a digit added/lost, one digit changed with a
+# big value jump) stay ~95-100% true on test; neighbours (one digit changed within 9,
+# a value within 20, transposed digits, conflicting non-leading numbers) drop from
+# 80-90% true on validation to 10-30% on test -- the business a few doors down.
+TYPO_KINDS = {"digit_added_or_lost", "one_digit_sub_big", "zeros"}
+NEIGHBOUR_KINDS = {"one_digit_sub_small", "near_value", "transposed", "na"}
+
+
+def _first_num(s):
+    for t in (s or "").split():
+        if t.isdigit():
+            return t
+    return ""
+
+
+def number_change_kind(addr1, addr2):
+    """Kind of difference between the leading house numbers of two addresses."""
+    from rapidfuzz.distance import DamerauLevenshtein
+    a, b = _first_num(addr1), _first_num(addr2)
+    if not a or not b:
+        return "na"
+    if a == b:
+        return "same"
+    if a.lstrip("0") == b.lstrip("0"):
+        return "zeros"
+    if sorted(a) == sorted(b):
+        return "transposed"
+    d = DamerauLevenshtein.distance(a, b)
+    if d == 1 and len(a) != len(b):
+        return "digit_added_or_lost"
+    if d == 1:
+        return "one_digit_sub_small" if abs(int(a) - int(b)) <= 9 else "one_digit_sub_big"
+    if abs(int(a) - int(b)) <= 20:
+        return "near_value"
+    return "far"
