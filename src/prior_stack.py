@@ -35,6 +35,7 @@ LABELLED = ["US", "India"]
 # --band-weights: per-band, uncapped negative weights (tried 27 Sep). Default: the per-group,
 # capped weighting that produced sub26 (leaderboard 0.967148).
 BAND_WEIGHTS = "--band-weights" in sys.argv
+APPLY_TO = next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--apply-to=")), None)
 N_VAL = {"US": 90123, "India": 59877}
 NUM = ["prob", "p1", "raw_ratio", "addr_ratio", "cand_blank", "s1_blank", "is_s3", "len_diff"]
 
@@ -133,6 +134,16 @@ def main():
     m = lgb.train(params, lgb.Dataset(Xv, label=y, weight=w, categorical_feature=cat_idx), num_boost_round=400)
     t = t.with_columns(pl.Series("pc", m.predict(X(t))))
     t.select("s1_id", "cand_id", "country", "prob", "pc").write_parquet(out)
+    if APPLY_TO:
+        # also score an unlabelled country with the model, encoded as a labelled one
+        # (e.g. --apply-to=France:US); its pairs go to <out>_<country>.parquet
+        src_c, as_c = APPLY_TO.split(":")
+        ta = owned(pl.concat(ts).group_by("s1_id", "cand_id").agg(pl.col("prob").mean(), pl.col("p1").mean()) if len(ts) > 1 else ts[0]).filter(pl.col("prob") >= 0.3)
+        ta = describe(ta, "test").join(tags, on=["s1_id", "cand_id"], how="left").filter(pl.col("country") == src_c)
+        enc = ta.with_columns(pl.lit(as_c).alias("country"))
+        ta = ta.with_columns(pl.Series("pc", m.predict(X(enc))))
+        ta.select("s1_id", "cand_id", "country", "prob", "pc").write_parquet(out.replace(".parquet", f"_{src_c}.parquet"))
+        print(f"{src_c} scored as {as_c}: {ta.height:,} pairs; keep share at 0.85: {(ta['pc'] >= 0.85).mean():.3f}")
     print(t.with_columns(pl.col("prob").cut([0.6, 0.8664, 0.97]).alias("band")).group_by("country", "band")
            .agg(pl.len(), pl.col("pc").mean().round(3).alias("mean_pc"), (pl.col("pc") >= 0.78).mean().round(3).alias("keep")).sort("country", "band"))
 
