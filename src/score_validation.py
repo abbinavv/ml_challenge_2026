@@ -32,6 +32,8 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--n-train", type=int, default=2000000)
     ap.add_argument("--n-val", type=int, default=150000)
+    ap.add_argument("--offset", type=int, default=0, help="same rotation as train_model.py --offset")
+    ap.add_argument("--chunk", type=int, default=150000, help="entities scored per chunk")
     a = ap.parse_args()
     t0 = time.time()
 
@@ -43,6 +45,8 @@ def main():
     cands = pl.read_parquet(a.cands)
     ents = np.array(sorted(cands["s1_id"].unique().to_list()))
     np.random.default_rng(7).shuffle(ents)
+    if a.offset:
+        ents = np.roll(ents, -a.offset)
     va = ents[a.n_train:a.n_train + a.n_val].tolist()
     cands = add_group_features(cands)
     cands = cands.filter(pl.col("s1_id").is_in(va))
@@ -50,16 +54,21 @@ def main():
 
     s1 = load_source("train", 1)
     pool = pl.concat([load_source("train", 2), load_source("train", 3)])
-    pairs = compute_stage1_features(build_pairs(cands, s1, pool))
-    pairs = pairs.with_columns(pl.Series("p1", m1.predict(pairs.select(f1).to_numpy())))
     gt, _ = load_ground_truth()
     lab = gt.rename({"match_id": "cand_id"}).with_columns(pl.lit(1).alias("label"))
-    allp = pairs.select("s1_id", "cand_id", "p1").join(lab, on=["s1_id", "cand_id"], how="left").fill_null(0)
-    pairs = compute_stage2_features(pairs.filter(pl.col("p1") >= cut))
-    pairs = pairs.with_columns(pl.Series("prob", m2.predict(pairs.select(feats).to_numpy())))
-    pairs = pairs.join(lab, on=["s1_id", "cand_id"], how="left").with_columns(pl.col("label").fill_null(0))
+    parts, pre = [], []
+    for i in range(0, len(va), a.chunk):
+        sub = cands.filter(pl.col("s1_id").is_in(va[i:i + a.chunk]))
+        pairs = compute_stage1_features(build_pairs(sub, s1, pool))
+        pairs = pairs.with_columns(pl.Series("p1", m1.predict(pairs.select(f1).to_numpy())))
+        pre.append(pairs.select("s1_id", "cand_id", "p1").join(lab, on=["s1_id", "cand_id"], how="left").fill_null(0))
+        pairs = compute_stage2_features(pairs.filter(pl.col("p1") >= cut))
+        pairs = pairs.with_columns(pl.Series("prob", m2.predict(pairs.select(feats).to_numpy())))
+        parts.append(pairs.join(lab, on=["s1_id", "cand_id"], how="left").with_columns(pl.col("label").fill_null(0)))
+        print(f"  scored {min(i + a.chunk, len(va)):,}/{len(va):,} entities ({time.time()-t0:.0f}s)", flush=True)
+    pairs = pl.concat(parts)
     pairs.write_parquet(a.out)
-    allp.write_parquet(a.out.replace(".parquet", "_prefilter.parquet"))
+    pl.concat(pre).write_parquet(a.out.replace(".parquet", "_prefilter.parquet"))
     print(f"wrote {a.out}: {pairs.height:,} pairs, {int(pairs['label'].sum()):,} true "
           f"({time.time()-t0:.0f}s)", flush=True)
 

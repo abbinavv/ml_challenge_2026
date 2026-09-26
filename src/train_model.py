@@ -75,6 +75,9 @@ def main():
                     help="training weight for NEGATIVE pairs whose house numbers conflict. The public "
                          "leaderboard shows test has many more same-street/different-number look-alikes "
                          "than train, so up-weighting them makes the model stricter where test punishes")
+    ap.add_argument("--offset", type=int, default=0,
+                    help="rotate the shuffled entity order by this many entities before taking the "
+                         "train / validation slices (cross-fitting: train on one half, score the other)")
     ap.add_argument("--stage1-keep", type=float, default=0.995,
                     help="share of blocking-found true matches the candidate filter must keep")
     args = ap.parse_args()
@@ -85,6 +88,8 @@ def main():
     ents = np.array(sorted(cands["s1_id"].unique().to_list()))
     rng = np.random.default_rng(7)
     rng.shuffle(ents)
+    if args.offset:
+        ents = np.roll(ents, -args.offset)
     if args.drop_s1 > 0:
         # Test has ~2x the decoys of train. Hide a share of S1 entities BEFORE the
         # competition features are computed: their true records stay in other
