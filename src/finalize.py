@@ -54,6 +54,10 @@ def main():
     ap.add_argument("--group-rules", default=None, metavar="DIR",
                     help="directory from src/group_rules.py: rescue mid-band groups that stay true on test, "
                          "veto groups that are decoys on test")
+    ap.add_argument("--calibrated", default=None, metavar="PARQUET",
+                    help="per-pair test-calibrated probabilities (src/test_calibrate.py); for the countries in "
+                         "it, matches are the owner pairs with pc >= --calibrated-min instead of the rules above")
+    ap.add_argument("--calibrated-min", type=float, default=0.78)
     ap.add_argument("--country-threshold", nargs="*", default=[], metavar="COUNTRY=T",
                     help="stricter threshold for some countries, e.g. France=0.97")
     a = ap.parse_args()
@@ -139,6 +143,15 @@ def main():
         print(f"legal-form veto {a.legal_veto}: -{int(chk['veto'].sum()):,} matches")
         sel = chk.filter(~pl.col("veto")).select("s1_id", "cand_id")
 
+    if a.calibrated:
+        cal = pl.read_parquet(a.calibrated)
+        cc = cal["country"].unique().to_list()
+        keep_other = sel.join(s1.select(pl.col("entity_id").alias("s1_id"), "country"), on="s1_id").filter(~pl.col("country").is_in(cc))
+        mine = cal.filter(pl.col("pc") >= a.calibrated_min).select("s1_id", "cand_id").join(owned.select("s1_id", "cand_id"), on=["s1_id", "cand_id"])
+        before = sel.height
+        sel = pl.concat([keep_other.select("s1_id", "cand_id"), mine]).unique()
+        print(f"calibrated decision for {cc} (pc >= {a.calibrated_min}): {before:,} -> {sel.height:,} matches")
+
     vetoed = 0
     if a.word_veto:
         names = {}
@@ -182,7 +195,8 @@ def main():
                "candidates_per_entity": sum(len(v) for v in c.values()) / n, "siblings": not a.no_siblings,
                "word_veto": a.word_veto, "vetoed": vetoed,
                "legal_veto": a.legal_veto, "country_threshold": a.country_threshold,
-               "neighbour_veto": a.neighbour_veto, "typo_rescue": a.typo_rescue, "group_rules": a.group_rules},
+               "neighbour_veto": a.neighbour_veto, "typo_rescue": a.typo_rescue, "group_rules": a.group_rules,
+               "calibrated": a.calibrated, "calibrated_min": a.calibrated_min},
               open(os.path.join(a.out_dir, "finalize.json"), "w"), indent=2)
     print(f"wrote {a.out_dir}")
 

@@ -228,3 +228,16 @@ sub21 +0.0137, sub22 +0.0144.
 python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8e
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub22 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e
 ```
+
+## sub23 (26 Sep evening): continuous per-pair calibration (src/test_calibrate.py) -- not preferred
+
+Domain classifier with group labels + fine similarities; validation-weighted mean D 0.499
+(correctly normalised). US/India matches = owner pairs with pc >= 0.78; France as sub22.
+Group-based budget/ranking: FP 0.053, missed 0.145 per S1, estimate 0.9250 vs sub22 0.9289
+(sibling expansion re-added 47.7K records the calibrator rejected). Kept as an alternative;
+sub22 stays the lead candidate.
+
+### Upload plan 27 Sep (00:00 onward)
+1. sub22 (best by the group ranking: +0.0144 over sub08 relative).
+2. If sub22 > 0.9565: sub21 / sub23 to test the bars and the continuous calibrator;
+   if not: sub15 (plain 0.97 threshold) to separate threshold from rules.
