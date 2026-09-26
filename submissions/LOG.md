@@ -243,3 +243,18 @@ sub22 stays the lead candidate.
 1. sub22 (best by the group ranking: +0.0144 over sub08 relative).
 2. If sub22 > 0.9565: sub21 / sub23 to test the bars and the continuous calibrator;
    if not: sub15 (plain 0.97 threshold) to separate threshold from rules.
+
+## sub26 (27 Sep): prior-corrected second stage (src/prior_stack.py) for US/India
+
+Validation pairs re-weighted to test priors: per group (country, number relation, name
+kind) validation negatives weighted by test negatives per S1 / validation negatives per S1
+(test negatives per S1 = test pairs per S1 - validation true pairs per S1). LightGBM on fine
+pair features learns P_test(true | x). 5-fold out-of-fold on validation, test-like weights:
+log-loss 0.1107 (first stage) -> 0.0469; decision comparison among pairs >= 0.3:
+  sub22 rules: P 0.9929 R 0.9648 pair-F0.5 0.9872;  model >= 0.85: P 0.9949 R 0.9805 F0.5 0.9920.
+```
+python src/prior_stack.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8e/test_pair_tags.parquet cache/test_pc2_v8.parquet
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub26 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc2_v8.parquet --calibrated-min 0.85
+```
+vs sub22: +155,665 / -44,546 matches; 3.29/entity. PASS. France unchanged from sub22.
+Leaderboard 27 Sep ~02:00: top six teams 0.990-0.991.
