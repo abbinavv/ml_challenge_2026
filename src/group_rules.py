@@ -9,8 +9,8 @@ see decide.number_change_kind).
 True variants are generated the same way in train and test, so per group the true
 pairs per S1 measured on validation predict the true pairs per S1 on test; test
 true rate = that / test pairs per S1. Writes <out_dir>/test_pair_tags.parquet and
-<out_dir>/group_rules.parquet: 'rescue' groups (score bands below 0.97, test rate >= 0.85)
-and 'veto' groups (per band, test rate <= 0.5; a group almost absent from validation
+<out_dir>/group_rules.parquet: 'rescue' groups (score bands below 0.97, test rate >= RESCUE_MIN)
+and 'veto' groups (per band, test rate <= VETO_MAX; a group almost absent from validation
     but frequent on test counts as decoys), for US and India. Rescue groups need
 >= 100 validation pairs; all groups >= 500 test pairs.
 """
@@ -50,12 +50,34 @@ def name_kind(country, c1, c2, k1, k2):
     if ga and all(w in FILL for w in ga): return "filler_for_word"
     if la and not ga: return "drop_word"
     return "swap_other"
+def _left_kind(a, b):
+    """Kind of the closest pair of numbers that only one side has (overlap:mixed)."""
+    from rapidfuzz.distance import DamerauLevenshtein
+    best = None
+    for x in a:
+        for y in b:
+            if not (x.isdigit() and y.isdigit()): continue
+            d = abs(int(x) - int(y))
+            if best is None or d < best[0]: best = (d, x, y)
+    if best is None: return "other"
+    d, x, y = best
+    if x.lstrip("0") == y.lstrip("0"): return "typo"
+    ed = DamerauLevenshtein.distance(x, y)
+    if ed == 1 and len(x) != len(y): return "typo"
+    if ed == 1 and d > 9: return "typo"
+    if sorted(x) == sorted(y) or d <= 20: return "neighbour"
+    return "far"
+
+
 def nums(n1, n2, e2):
     if e2: return "blank"
     a, b = set((n1 or "").split()), set((n2 or "").split())
     if not a or not b: return "no_num"
     if a == b: return "same"
-    return "overlap" if a & b else "conflict"
+    if a & b:
+        if a <= b or b <= a: return "overlap:subset"
+        return "overlap:mixed_" + _left_kind(a - b, b - a)
+    return "conflict"
 def tag(pairs, split):
     s1 = load_source(split,1).select(pl.col("entity_id").alias("s1_id"), "country", pl.col("name_core").alias("c1"), pl.col("name_key").alias("k1"), pl.col("addr_nums").alias("n1"), pl.col("addr_norm").alias("a1"))
     pool = pl.concat([load_source(split,2),load_source(split,3)]).select(pl.col("entity_id").alias("cand_id"), pl.col("name_core").alias("c2"), pl.col("name_key").alias("k2"),
@@ -65,6 +87,10 @@ def tag(pairs, split):
         pl.struct("country","c1","c2","k1","k2").map_elements(lambda r: name_kind(r["country"], r["c1"], r["c2"], r["k1"], r["k2"]), return_dtype=pl.Utf8).alias("nk"),
         pl.struct("n1","n2","e2","a1","a2").map_elements(lambda r: (lambda c: "conflict:" + number_change_kind(r["a1"], r["a2"]) if c == "conflict" else c)(nums(r["n1"], r["n2"], r["e2"])), return_dtype=pl.Utf8).alias("nc"))
 BANDS = [(0.3, 0.6), (0.6, 0.8664), (0.8664, 0.97), (0.97, 1.01)]
+# Macro F0.5 gains from a pair only if its chance of being true exceeds ~F*/(1+0.5^2)
+# ~= 0.78 (F* ~ 0.97). Margins around it absorb estimation noise; groups in between keep
+# the default decision (score threshold).
+RESCUE_MIN, VETO_MAX = 0.82, 0.74
 
 
 def main():
@@ -87,8 +113,8 @@ def main():
         j = b.join(a, on=["country","nc","nk"], how="left").with_columns((pl.col("tps")/pl.col("tt")).round(3).alias("test_rate"))
         j = j.filter((pl.col("country")!="France") & (pl.col("t_n")>=500))
         if hi <= 0.97:
-            rules.append(j.filter((pl.col("v_n")>=100) & (pl.col("test_rate")>=0.85)).with_columns(pl.lit("rescue").alias("action"), pl.lit(band).alias("band")))
-        rules.append(j.filter(pl.col("test_rate").fill_null(0.0)<=0.5).with_columns(pl.lit("veto").alias("action"), pl.lit(band).alias("band")))
+            rules.append(j.filter((pl.col("v_n")>=100) & (pl.col("test_rate")>=RESCUE_MIN)).with_columns(pl.lit("rescue").alias("action"), pl.lit(band).alias("band")))
+        rules.append(j.filter(pl.col("test_rate").fill_null(0.0)<=VETO_MAX).with_columns(pl.lit("veto").alias("action"), pl.lit(band).alias("band")))
     r = pl.concat([x.with_columns(pl.col(pl.Float64).cast(pl.Float64)) for x in rules], how="diagonal")
     r = r.select("band","country","nc","nk","action","v_n","val_rate","t_n","test_rate")
     # France has no labels. Its true variants follow the same generator (identical names,
@@ -97,7 +123,7 @@ def main():
     # can be ANOTHER business at the same address (brand, swapped real word) are not
     # borrowed: France has twice as many co-located businesses as train.
     safe_nk = ["identical", "typo", "drop_word", "reorder", "filler_for_word", "initialism"]
-    safe_nc = ["same", "blank", "no_num", "conflict:digit_added_or_lost", "conflict:one_digit_sub_big", "conflict:zeros"]
+    safe_nc = ["same", "blank", "no_num", "overlap:subset", "conflict:digit_added_or_lost", "conflict:one_digit_sub_big", "conflict:zeros"]
     fr = r.filter((pl.col("country") == "US") & (pl.col("action") == "rescue") & pl.col("nk").is_in(safe_nk) & pl.col("nc").is_in(safe_nc))
     r = pl.concat([r, fr.with_columns(pl.lit("France").alias("country"))])
     r.write_parquet(os.path.join(out_dir, "group_rules.parquet"))

@@ -213,3 +213,18 @@ python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub20 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8c
 ```
 +117,930 rescued (France ~17K), 3.23 matches/entity. PASS.
+
+## sub21 / sub22 (26 Sep evening): split overlapping numbers; F0.5 break-even bars
+
+Error budget (US+India, group-calibrated, per S1) showed 'overlap' pairs (identical name,
+numbers partly shared; mostly India multi-number addresses) as the largest source of both
+false positives and misses. Split: overlap:subset (one side is a truncation) 87-100% true;
+overlap:mixed_typo 88-89%; overlap:mixed_neighbour 8-28% (incl. 12,171 US top-band pairs at
+0.28) -> sub21 (rules_v8d): budget FP 0.057 -> 0.0525, missed 0.126 -> 0.107 per S1.
+sub22 (rules_v8e): rescue >= 0.82 / veto <= 0.74 around the F0.5 break-even F*/1.25 ~ 0.78:
+FP 0.0437, missed 0.116 per S1. Ranking estimator (relative to sub08): sub20 +0.0102,
+sub21 +0.0137, sub22 +0.0144.
+```
+python src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8e
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub22 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e
+```
