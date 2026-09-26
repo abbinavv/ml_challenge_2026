@@ -32,3 +32,19 @@ python src/add_key_candidates.py test cache/test_cands_k30.parquet 20
 python src/train_model.py cache/train_cands_k30_plus.parquet artifacts/v4 --full --n-train 250000 --n-val 80000
 python src/predict.py cache/test_cands_k30_plus.parquet artifacts/v4 output/sub03
 ```
+
+## Leaderboard experiments (26 Sep)
+
+Same sub06 model scores, only the decision changed, to learn the direction of the
+validation-vs-leaderboard gap:
+
+| Upload | Decision | Matches/entity | Public LB |
+|---|---|---|---|
+| exp06_loose | threshold 0.45 | 3.64 | 0.920969 |
+| sub06 | threshold 0.725 | 3.48 | 0.936795 |
+| exp06_strict | threshold 0.90 | 3.34 | **0.948075** |
+
+Conclusion: precision problem on test. The 0.725-0.90 band is 43% house-number
+conflicts (same name + same street, different number: look-alike neighbours), vs 2.9%
+of pairs above 0.97. Next: conflict-aware rule (src/conflict_rule.py) -- exp06_conflict97
+(conflicts need >= 0.97, others 0.725; 3.36/entity) and exp06_conflict995 (>= 0.995; 3.31/entity).
