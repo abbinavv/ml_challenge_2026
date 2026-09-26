@@ -69,6 +69,12 @@ def main():
                          "like the extra decoys in test (test has ~5.75 records per S1 vs 4.68 in train -> 0.186)")
     ap.add_argument("--eval-model", default=None,
                     help="also score an existing model dir on this validation set (e.g. to measure the shift)")
+    ap.add_argument("--max-rounds", type=int, default=1000,
+                    help="upper bound on boosting rounds (early stopping decides the actual number)")
+    ap.add_argument("--conflict-neg-weight", type=float, default=1.0,
+                    help="training weight for NEGATIVE pairs whose house numbers conflict. The public "
+                         "leaderboard shows test has many more same-street/different-number look-alikes "
+                         "than train, so up-weighting them makes the model stricter where test punishes")
     ap.add_argument("--stage1-keep", type=float, default=0.995,
                     help="share of blocking-found true matches the candidate filter must keep")
     args = ap.parse_args()
@@ -152,12 +158,15 @@ def main():
         f"{va['label'].sum() / n_blocked_pos:.2%} of blocking-found matches kept")
 
     # ---- Stage C: main model on the candidate set ---------------------------------
-    dtr = lgb.Dataset(tr.select(feats).to_numpy(), label=tr["label"].to_numpy(), feature_name=feats)
+    w = np.where((tr["label"].to_numpy() == 0) & (tr["nums_conflict"].to_numpy() > 0),
+                 args.conflict_neg_weight, 1.0)
+    log(f"training weights: {int((w > 1).sum()):,} conflicting-number negatives weighted x{args.conflict_neg_weight}")
+    dtr = lgb.Dataset(tr.select(feats).to_numpy(), label=tr["label"].to_numpy(), weight=w, feature_name=feats)
     dva = lgb.Dataset(va.select(feats).to_numpy(), label=va["label"].to_numpy(), reference=dtr)
     params = dict(objective="binary", learning_rate=0.08, num_leaves=127, min_data_in_leaf=100,
                   feature_fraction=0.9, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0,
                   num_threads=10, verbose=-1, seed=7)
-    model = lgb.train(params, dtr, num_boost_round=1000, valid_sets=[dva],
+    model = lgb.train(params, dtr, num_boost_round=args.max_rounds, valid_sets=[dva],
                       callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(200)])
     log(f"trained {model.best_iteration} rounds ({time.time()-t0:.0f}s)")
 

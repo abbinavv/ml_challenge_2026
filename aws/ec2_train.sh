@@ -4,17 +4,20 @@
 # Run on an Amazon Linux 2023 instance whose IAM role can read/write the bucket:
 #   sudo -i
 #   curl -fsSL https://raw.githubusercontent.com/abbinavv/ml_challenge_2026/main/aws/ec2_train.sh -o ec2_train.sh
-#   nohup bash ec2_train.sh <bucket> > run.log 2>&1 &
+#   nohup bash ec2_train.sh <bucket> [name] [n_train] [n_val] [extra train_model args...] > run.log 2>&1 &
 #   tail -f run.log
 #
 # Expects in s3://<bucket>/:  cache/{train_s1,train_s2,train_s3,train_cands_k30_plus}.parquet
 #                             train_ground_truth.tsv
-# Writes model to            s3://<bucket>/artifacts/v7/  (model.txt, stage1.txt, meta.json, train.log)
+# Writes model to            s3://<bucket>/artifacts/<name>/  (model.txt, stage1.txt, meta.json, train.log)
 # Stops the instance at the end (shutdown behaviour must be "Stop").
 set -euo pipefail
-BUCKET=${1:?usage: ec2_train.sh <bucket> [n_train] [n_val]}
-NTRAIN=${2:-2000000}
-NVAL=${3:-150000}
+BUCKET=${1:?usage: ec2_train.sh <bucket> [name] [n_train] [n_val] [extra train_model args...]}
+NAME=${2:-v7}
+NTRAIN=${3:-2000000}
+NVAL=${4:-150000}
+shift $(( $# < 4 ? $# : 4 ))
+EXTRA=("$@")
 
 echo "== $(date) installing tools"
 dnf install -y -q git
@@ -35,11 +38,11 @@ aws s3 cp "s3://$BUCKET/train_ground_truth.tsv" data/dataset/train/ --only-show-
 export BER_DATA=data/dataset
 
 echo "== $(date) training on up to $NTRAIN train + $NVAL validation entities"
-.venv/bin/python -u src/train_model.py cache/train_cands_k30_plus.parquet artifacts/v7 \
-  --full --n-train "$NTRAIN" --n-val "$NVAL" 2>&1 | grep -v "Warning" | tee artifacts/train_v7.log
+.venv/bin/python -u src/train_model.py cache/train_cands_k30_plus.parquet "artifacts/$NAME" \
+  --full --n-train "$NTRAIN" --n-val "$NVAL" "${EXTRA[@]}" 2>&1 | grep --line-buffered -v "Warning" | tee "artifacts/train_$NAME.log"
 
 echo "== $(date) uploading model"
-cp artifacts/train_v7.log artifacts/v7/train.log
-aws s3 cp artifacts/v7 "s3://$BUCKET/artifacts/v7/" --recursive --only-show-errors
+cp "artifacts/train_$NAME.log" "artifacts/$NAME/train.log"
+aws s3 cp "artifacts/$NAME" "s3://$BUCKET/artifacts/$NAME/" --recursive --only-show-errors
 echo "== $(date) done; stopping instance"
 shutdown -h now
