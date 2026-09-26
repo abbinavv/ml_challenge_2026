@@ -121,3 +121,21 @@ S1s listing the candidate) + list-context features. Half/half validation:
 The gain exists only at looser operating points; the leaderboard rewards the strict one
 (test threshold 0.87 vs 0.675 on validation). sub13 (stacked scores, sub08 settings) built
 and PASS, but not recommended: ~80K pairs reshuffled, many near-number look-alikes.
+
+## Label-free test calibration (26 Sep evening) -> sub15 recommended for the 27 Sep 00:00 upload
+
+True variants are generated the same way in train and test; test adds decoys. So per score
+band (or pair-type group) test precision ~= validation true pairs per S1 / test pairs per S1
+(src/ber/calibrate.py). Top bands match exactly (India 2.53 vs 2.53 pairs/S1 above 0.999,
+US 2.67 vs 2.68), mid bands are ~2x denser on test:
+  v8 0.87-0.93: val precision 91-93% -> test ~41-55%;  0.93-0.97: 95-97% -> ~57-67%;
+  0.97-0.99: 98-99% -> ~76-84%.  By pair type (US/India, prob 0.5-0.97): same name +
+  conflicting number 18%, India shared number + different name 34%, ...
+The absolute score estimate is NOT reliable on test (sub08 estimated 0.929 vs LB 0.9565), but
+both analyses and the leaderboard trend say the 0.87 cut-off is too loose in every country.
+
+| File | Change vs sub08 |
+|---|---|
+| sub15 | global threshold 0.97 (3.18 matches/entity) -- recommended first on 27 Sep |
+| sub11 | global threshold 0.9419 (3.24/entity) |
+| sub10 | France-only threshold 0.97 |
