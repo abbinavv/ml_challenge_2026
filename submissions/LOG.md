@@ -439,3 +439,13 @@ python src/toggle.py output/sub39 output/sub40 --remove cache/fr_main_veto_sub40
 ```
 - Public leaderboard: **sub40 0.972202** (best; predicted ~0.9715). Dronaut_submission.zip rebuilt around sub40.
   src/france_veto.py --main-min 0.9 reproduces sub40 from sub39_base in one step (verified identical).
+
+## sub41 (27 Sep ~22:15): US/India cut-off 0.94
+
+Refit on sub40's real gain (+0.0011 for 26,968 removed pairs): curve prob^7.66 (implied true rate
+0.42). Under prob^7.66 and prob^5.42: cut-off 0.94 predicted 0.9731 / 0.9727 (best or near-best
+under both); 0.95 0.9731 / 0.9724; 0.97 0.9724 / 0.9712. French main cut-off already optimal.
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub41_base --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.94
+python src/france_veto.py output/sub41_base output/sub41 cache/test_pc_cf_France.parquet --main-min 0.9
+```
