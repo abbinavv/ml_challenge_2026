@@ -450,3 +450,23 @@ python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/su
 python src/france_veto.py output/sub41_base output/sub41 cache/test_pc_cf_France.parquet --main-min 0.9
 ```
 - Public leaderboard: **sub41 0.973202** (best). Zip rebuilt around sub41.
+
+## Final (27 Sep, 22:30): submission limit reached -- final = sub41, **0.973202**
+
+Prepared but not uploaded (limit reached): cut-off 0.95 / 0.96 / 0.97 variants
+(output/sub42_c0.95|0.96|0.97), predicted 0.9734-0.9736 / 0.9735-0.9739 / 0.9726-0.9739 from the
+curve refit on sub41 (the pairs removed at 0.92-0.94 were ~39% true on test: prob^12.5).
+
+Leaderboard progression: 0.935552 (sub04) -> 0.948075 (exp06_strict) -> 0.956511 (sub08) ->
+0.963841 (sub22) -> 0.967148 (sub26) -> 0.9681 (sub33) -> 0.970977 (sub37) -> 0.971088 (sub38)
+-> 0.972202 (sub40) -> **0.973202 (sub41, final; Dronaut_submission.zip)**.
+
+Lessons:
+- The test set has ~2x the look-alike decoys of train; validation F0.5 (0.975) over-stated the
+  leaderboard until the decision was calibrated to test (label-free pair densities, then the
+  leaderboard itself: model probabilities in 0.7-0.94 were only ~40% true on test).
+- The largest late gains came from (1) the prior-corrected second stage with record-to-record
+  cohesion features and (2) leaderboard-calibrated cut-offs; tuning / other learners were minor.
+- Ceiling of this design ~0.973-0.974: ~2.7% of true matches never reach the model (blocking,
+  candidate filter). Beating it needs wider blocking or record clustering (multi-day work).
+- No ID / row-order / train-test overlap leak was found (checked on train and across splits).
