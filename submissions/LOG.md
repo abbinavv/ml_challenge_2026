@@ -429,3 +429,11 @@ sub38 is at/near the optimum of this decision approach.
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub39_base --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.92
 python src/france_veto.py output/sub39_base output/sub39 cache/test_pc_cf_France.parquet
 ```
+
+## sub40 (prepared, 27 Sep ~22:10): sub39 + French main matches the model rates < 0.9
+
+France's 815K matches: 789K rated >= 0.99 by the model (encoded as US); the 1,809 below 0.9
+calibrate to ~25% true; removing them predicted +0.0001. sub40 predicted ~0.9715 (sub38 0.971088).
+```
+python src/toggle.py output/sub39 output/sub40 --remove cache/fr_main_veto_sub40.parquet
+```
