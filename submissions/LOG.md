@@ -419,3 +419,13 @@ python src/make_package.py output/sub38 Dronaut
 ```
 - Public leaderboard: **sub37 0.970977**, **sub38 0.971088** (best). Both above prediction (~0.970):
   the leaderboard-calibrated cut-off works; the model is at least as over-confident as the sub35 curve.
+
+## sub39 (prepared, 27 Sep ~21:10): cut-off 0.92 under the refit calibration curve
+
+Refit with sub37's real gain: true rate ~ prob ^ 3.19 (sub35 alone: 2.55). On top of sub38:
+cut-off 0.92 predicted 0.9714 (+0.0003), 0.94 0.9708, 0.96 0.9696; extra French veto +0.0000.
+sub38 is at/near the optimum of this decision approach.
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub39_base --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.92
+python src/france_veto.py output/sub39_base output/sub39 cache/test_pc_cf_France.parquet
+```
