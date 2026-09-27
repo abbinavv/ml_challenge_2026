@@ -380,3 +380,13 @@ true_rate = model_prob ^ 2.55 through that point: sub34's matches rated 0.7-0.85
 ```
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub36 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfl_det.parquet --calibrated-min 0.85
 ```
+
+## sub37 (prepared): sub36 minus France rule-rescued matches that calibrate below break-even
+
+France's 17,930 matches below v8 0.97 come from rescue rules with US-borrowed rates. Scored by the
+prior-corrected model encoded as US (cache/test_pc_cf_France.parquet) and calibrated with the
+sub35 curve (prob^2.55): 0.3-0.6 band 5,930 pairs ~24% true, 0.6-0.87 band 3,142 ~53%. Removing
+the 10,464 below 0.78: predicted +0.0006 over sub36 (-> ~0.9701).
+```
+python src/toggle.py output/sub36 output/sub37 --remove cache/fr_lowcal_sub37.parquet
+```
