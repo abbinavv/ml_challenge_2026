@@ -7,7 +7,8 @@ Source-1 entity (singletons included).
 Pipeline: **normalise → block (candidate generation) → LightGBM pair model (two-stage
 cascade) → label-free test calibration → decision rules → submission files.**
 
-Final submission: public leaderboard **0.967148** (27 Sep 2026).
+Final submission: this pipeline (sub34); the same method scored **0.9681** on the public
+leaderboard (sub33, 27 Sep 2026).
 `candidate_pairs.tsv` holds **5.30 candidates per Source-1 entity**.
 
 ## Environment
@@ -61,27 +62,35 @@ $PY src/score_validation.py cache/train_cands_k30_plus.parquet artifacts/v8 cach
 # 5. Label-free test calibration: group rules from validation-vs-test pair densities
 $PY src/group_rules.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet cache/rules_v8e
 
-# 6. Prior-corrected second stage for US/India (validation labels, test-level negatives).
-#    --street: the validation-side tags split far/no-number groups by street agreement,
-#    exactly as for the submitted file (test tags come from step 5, without that split).
-$PY src/prior_stack.py cache/val_v8_scored.parquet output/v8_raw/scored_pairs.parquet \
-    cache/rules_v8e/test_pair_tags.parquet cache/test_pc2_v8.parquet --street
+# 6. Cross-fitted first stage (EC2, ~2.5 h): two half-models, each scores the other half of
+#    train and the test set -> cache/crossfit/cf{0,1}/ ; then the second-stage inputs
+bash aws/ec2_crossfit.sh <bucket>          # results copied to cache/crossfit/cf0, cf1
+$PY src/crossfit_prep.py
 
-# 7. Final decisions and both submission files
+# 7. Prior-corrected second stage for US/India on 898K cross-fitted entities: fine pair
+#    features + rival, list-context and record-to-record cohesion features, first-stage
+#    scores down to 0.02. --street: validation-side tags split far/no-number groups by
+#    street agreement (as for every submitted second stage).
+$PY src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet \
+    cache/crossfit/test_tags_cf_low.parquet cache/test_pc_final.parquet \
+    --street --context --cohesion --floor=0.02 --n-val-json=cache/crossfit/oof_sample_counts.json
+
+# 8. Final decisions and both submission files
 $PY src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/final \
     --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France \
     --typo-rescue 0.8664 --group-rules cache/rules_v8e \
-    --calibrated cache/test_pc2_v8.parquet --calibrated-min 0.85
+    --calibrated cache/test_pc_final.parquet --calibrated-min 0.7
 
-# 8. Official checker
+# 9. Official checker
 python3 data/utils/validate_submission.py \
     --matching output/final/matching_results.tsv \
     --candidate output/final/candidate_pairs.tsv \
     --test-dir data/dataset/test --check-ids
 ```
 
-Steps 5-7 were re-run from the saved step-4 outputs and reproduce the submitted files
-exactly (5,695,612 matches, 9,186,087 candidate pairs, zero differences).
+Steps 6-8 are deterministic (LightGBM deterministic mode, fixed tie-breaks): two runs from
+the saved cross-fit outputs give identical files (5,851,961 matches before the word veto;
+9,186,608 candidate pairs).
 
 ## Code map
 
@@ -94,6 +103,7 @@ exactly (5,695,612 matches, 9,186,087 candidate pairs, zero differences).
 | `src/ber/decide.py` | One-owner rule, word-swap veto, legal-form conflict, house-number change kinds |
 | `src/ber/calibrate.py` | Pair-density calibration helpers (validation vs test) |
 | `src/ber/domain.py` | Cheap pair descriptors shared by the calibration steps |
+| `src/ber/rivals.py` | Rival (other S1s listing a candidate), list-context and record-to-record cohesion features |
 | `src/ber/metrics.py` | Official macro F0.5 (singleton rule included) |
 | `src/learn_translit.py` | Learns the Indian-script word dictionary and sound-alike map |
 | `src/run_blocking.py`, `src/reblock_country.py`, `src/add_key_candidates.py` | Candidate generation |
@@ -101,7 +111,8 @@ exactly (5,695,612 matches, 9,186,087 candidate pairs, zero differences).
 | `src/predict.py` | Cascade scoring of test candidates |
 | `src/score_validation.py` | Re-scores held-out entities with features and labels |
 | `src/group_rules.py` | Label-free rescue / veto rules per (country, score band, number relation, name change) |
-| `src/prior_stack.py` | Prior-corrected second stage (test-level negative weights) |
+| `src/crossfit_prep.py` | Samples the cross-fitted train scores, averages the test scores, tags test pairs |
+| `src/prior_stack.py` | Prior-corrected second stage (test-level negative weights; rival, context and cohesion features) |
 | `src/finalize.py` | Candidate set, one-owner, threshold, rules, calibrated decision, sibling expansion, files |
 | `aws/ec2_train.sh`, `aws/ec2_crossfit.sh` | EC2 training / cross-fitting runs |
 

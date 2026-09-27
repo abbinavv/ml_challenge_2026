@@ -16,8 +16,8 @@ many look-alike decoys as train (neighbouring businesses: a house number a few d
 one business word swapped, an extra business word). A model tuned on train validation is
 over-confident on them. We measure this shift from pair densities (true variants are
 generated the same way in train and test, so any excess of a pair type on test is decoys),
-turn it into decision rules and a prior-corrected second-stage model, and raised the public
-leaderboard from 0.9356 to **0.9671**.
+turn it into decision rules and a prior-corrected second-stage model with record-to-record
+"cohesion" evidence, and raised the public leaderboard from 0.9356 to **0.9681**.
 
 ---
 
@@ -75,7 +75,7 @@ veto rules and the weights of a prior-corrected second-stage model. No test labe
   empty address (keys shared by at most 20 records).
 - **Candidate filter:** a small LightGBM on cheap features keeps 99% of the true matches that
   blocking found (cut-off measured on held-out entities).
-- **Candidate pairs generated:** 9,186,087 in `candidate_pairs.tsv` = **5.30 per Source-1
+- **Candidate pairs generated:** 9,186,608 in `candidate_pairs.tsv` = **5.30 per Source-1
   entity** (blocking before the filter: ~31 per entity).
 - **How you ensured true matches were not lost:** blocking recall measured on held-out train
   entities: 98.0% of true pairs reach the blocking candidates, 97.5% survive the filter. The
@@ -119,12 +119,16 @@ numbers conflict weighted x3.
    frequent business word ('Fontaine Club' vs 'Fontaine Amicale') is rejected (0.02% of true
    train pairs flagged vs 3.3% of French test matches).
 6. Prior-corrected second stage for US and India (`src/prior_stack.py`): a LightGBM trained on
-   the 150K held-out entities (labels) with fine pair features and change kinds, whose
-   negatives are re-weighted per group to test levels (test negatives per entity = test pairs
-   per entity - validation true pairs per entity). It learns P_test(true | pair) and splits
-   groups the rules can only treat as a whole; pairs with P >= 0.85 are kept. France (no
-   labels) keeps steps 1-5, borrowing only US rescue rules for kinds that cannot be another
-   business at the same address.
+   898K train entities whose first-stage scores are out-of-sample (cross-fitting on EC2: two
+   half-models, each scoring the other half), with labels, fine pair features, change kinds,
+   rival features (how the candidate fits competing Source-1 entities), list context, and
+   record-to-record cohesion (how its name / address / house number agree with the entity's
+   other confident vs rejected candidates). Negatives are re-weighted per group to test
+   levels (test negatives per entity = test pairs per entity - validation true pairs per
+   entity), so it learns P_test(true | pair). It scores pairs down to first-stage 0.02 (1.5%
+   of true matches scored below 0.3) and keeps P >= 0.7. France (no labels) keeps steps 1-5,
+   borrowing only US rescue rules for kinds that cannot be another business at the same
+   address.
 7. Sibling expansion: an unclaimed record with the same country, key name and address key as
    a matched record joins that match (99.9% same business on train truth).
 
@@ -138,8 +142,10 @@ held-out entities re-weighted to test levels.
 
 - **F_0.5 Score (macro), validation:** 0.9749 for the v8 model on 150K held-out train entities
   (precision 0.9945, recall 0.9442; India 0.9705, US 0.9779). Under test-level negative
-  weights (pairs scored >= 0.3), the final decision reaches precision 0.9934, recall 0.9852,
-  vs 0.9929 / 0.9648 for the rule-only decision.
+  weights (out-of-fold, pairs scored >= 0.3), the second stage reaches precision 0.9975, recall
+  0.9914 at P >= 0.78 (log-loss 0.1069 -> 0.0215), vs 0.9929 / 0.9648 for the rule-only decision.
+  Ceiling: only 95.8% of true matches reach the scored pairs (blocking ~2%, candidate filter
+  0.5%, one-owner 0.2%, first-stage < 0.3 ~1.5%); scoring down to 0.02 recovers part of the last.
 - **Public leaderboard progression:**
 
 | File | Change | Public F0.5 |
@@ -149,7 +155,8 @@ held-out entities re-weighted to test levels.
 | exp06 | same scores, threshold 0.45 / 0.90 | 0.920969 / 0.948075 |
 | sub08 | v8 (2.0M entities, EC2) + word-swap veto | 0.956511 |
 | sub22 | test-calibrated decision rules (steps 2-4) | 0.963841 |
-| **sub26** | **+ prior-corrected second stage (step 6)** | **0.967148** |
+| sub26 | + prior-corrected second stage (150K entities) | 0.967148 |
+| **sub33** | **+ cross-fitted 898K entities, rival / context / cohesion features, floor 0.02** | **0.9681** |
 
 - **Common false positives (wrong merges):** neighbouring businesses built to look alike: the
   same name a few house numbers away (221 vs 225, 19 vs 22), one business word swapped or
@@ -169,7 +176,8 @@ held-out entities re-weighted to test levels.
 A standard blocking + gradient-boosting pipeline reaches 0.975 on train validation but loses
 precision on test, where look-alike decoys are twice as frequent. Measuring that shift from
 pair densities, without labels, and correcting the decision for it (type-specific rules and a
-prior-corrected second stage) was worth +0.031 on the public leaderboard (0.9356 -> 0.9671)
+prior-corrected second stage with cohesion evidence) was worth +0.033 on the public leaderboard
+(0.9356 -> 0.9681)
 while keeping 5.3 candidates per entity. The main lesson: when test differs from train,
 validate the decision rule against the target distribution, not only the model.
 
@@ -183,11 +191,12 @@ validate the decision rule against the target distribution, not only the model.
 data -> blocking -> matching -> output) and `requirements.txt` (pinned). Entry points in order:
 `build_cache.py`, `learn_translit.py`, `run_blocking.py`, `reblock_country.py`,
 `add_key_candidates.py`, `train_model.py`, `predict.py`, `score_validation.py`,
-`group_rules.py`, `prior_stack.py`, `finalize.py`. Steps from `group_rules.py` onward were
-re-run from saved inputs and reproduce `output/matching_results.tsv` and
-`output/candidate_pairs.tsv` exactly. Note: the submitted second stage was trained with the
+`group_rules.py`, `crossfit_prep.py`, `prior_stack.py`, `finalize.py`. The second stage and
+the final step are deterministic (identical output on repeated runs). Note: the submitted second stage was trained with the
 street-agreement split enabled on the validation side only (`prior_stack.py --street`); the
-README reproduces that configuration as submitted.
+README reproduces that configuration as submitted. The packaged output (sub34) is the
+deterministic re-run of the sub33 method; it differs from the scored sub33 file in 0.12% of
+matches (thread-level randomness in that run).
 
 ### B. Additional Results
 

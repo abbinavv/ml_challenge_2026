@@ -74,10 +74,10 @@ def context_features(scored, pool):
     scored: s1_id, cand_id, prob. pool: entity_id, addr_nums, name_norm."""
     p = pool.select(pl.col("entity_id").alias("cand_id"), pl.col("addr_nums").fill_null("").alias("nn"),
                     pl.col("name_norm").fill_null("").alias("mm"))
-    d = scored.select("s1_id", "cand_id", "prob").join(p, on="cand_id", how="left")
+    d = scored.select("s1_id", "cand_id", "prob").join(p, on="cand_id", how="left").sort("s1_id", "cand_id")
     hi, lo = (pl.col("prob") >= 0.9), (pl.col("prob") < 0.3)
     d = d.with_columns(
-        pl.col("prob").rank("ordinal", descending=True).over("s1_id").alias("prob_rank"),
+        pl.col("prob").rank("ordinal", descending=True).over("s1_id").alias("prob_rank"),   # ties: cand_id order
         hi.sum().over("s1_id").alias("n_hi"),
         ((pl.col("nn") != "") & hi).sum().over("s1_id", "nn").alias("_nh"),
         ((pl.col("nn") != "") & lo).sum().over("s1_id", "nn").alias("_nl"),
@@ -130,7 +130,8 @@ def cohesion_features(scored, pool, n_chunks=8, hi=0.9, lo=0.3):
             pl.col("same_nu").filter(~pl.col("is_hi")).mean().alias("lo_num_share"))
         # consensus house numbers of the confident group
         cons = x.filter((pl.col("prob") >= hi) & (pl.col("nu") != "")).group_by("s1_id", "nu").len() \
-                .sort("len", descending=True).group_by("s1_id").agg(pl.col("nu").first().alias("cons_nu"))
+                .sort(["s1_id", "len", "nu"], descending=[False, True, False]) \
+                .group_by("s1_id", maintain_order=True).agg(pl.col("nu").first().alias("cons_nu"))
         x2 = x.select("s1_id", "cand_id", "nu").join(cons, on="s1_id", how="left") \
               .with_columns(pl.when(pl.col("cons_nu").is_null() | (pl.col("nu") == "")).then(None)
                             .otherwise((pl.col("nu") == pl.col("cons_nu")).cast(pl.Float64)).alias("num_is_consensus"))

@@ -139,9 +139,11 @@ def main():
         enc = [df[c].replace_strict({k: i for i, k in enumerate(cats[c])}, default=-1, return_dtype=pl.Int32).to_numpy() for c in ("nc", "nk")]
         return np.column_stack([df.select(NUM).to_numpy()] + enc + [(df["country"] == "India").cast(pl.Int8).to_numpy()])
 
+    v = v.sort("s1_id", "cand_id"); t = t.sort("s1_id", "cand_id")
+    w = np.where(v["label"].to_numpy() == 1, 1.0, v["w_neg"].to_numpy())
     Xv, y = X(v), v["label"].to_numpy()
     params = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in_leaf=200, lambda_l2=5.0,
-                  verbose=-1, seed=7, num_threads=10)
+                  verbose=-1, seed=7, num_threads=10, deterministic=True, force_col_wise=True)
     cat_idx = [len(NUM), len(NUM) + 1, len(NUM) + 2]
     ents = v["s1_id"].to_numpy()
     uniq = np.unique(ents); rng = np.random.default_rng(3); fold_of = dict(zip(uniq, rng.integers(0, 5, len(uniq))))
