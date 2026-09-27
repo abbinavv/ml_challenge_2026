@@ -321,3 +321,16 @@ leaderboard 0.9702. Decision-stage ceiling rises (perfect decisions E 0.9851 -> 
 python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf_low.parquet cache/test_pc_cfl.parquet --street --context --cohesion --floor=0.02 --n-val-json=cache/crossfit/oof_sample_counts.json
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub33 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfl.parquet --calibrated-min 0.7
 ```
+- sub33 public leaderboard: **0.9681** (27 Sep; best; predicted 0.9702 -> ~1/3 of the predicted gain realised).
+
+## sub34 (27 Sep ~12:20): deterministic re-run of the sub33 method -- packaged final output
+
+prior_stack made deterministic (LightGBM deterministic / force_col_wise, rows sorted, fixed
+tie-breaks in list-context and cohesion features); two runs give identical output. sub34
+differs from the scored sub33 file in 0.12% of matches (thread-level randomness in the sub33
+run). Dronaut_submission.zip holds sub34 + code + documentation; expected score ~0.968.
+```
+python src/crossfit_prep.py
+python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf_low.parquet cache/test_pc_final.parquet --street --context --cohesion --floor=0.02 --n-val-json=cache/crossfit/oof_sample_counts.json
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/final --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.7
+```
