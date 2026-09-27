@@ -7,8 +7,7 @@ Source-1 entity (singletons included).
 Pipeline: **normalise → block (candidate generation) → LightGBM pair model (two-stage
 cascade) → label-free test calibration → decision rules → submission files.**
 
-Final submission: this pipeline (sub38). Earlier versions of the same method scored **0.9681**
-(sub33) and **0.968043** (sub34) on the public leaderboard (27 Sep 2026).
+Final submission: this pipeline (sub40), public leaderboard **0.972202** (27 Sep 2026).
 `candidate_pairs.tsv` holds **5.30 candidates per Source-1 entity**.
 
 ## Environment
@@ -79,14 +78,15 @@ $PY src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg
     cache/crossfit/test_tags_cf.parquet cache/test_pc_cf.parquet \
     --street --apply-to=France:US --n-val-json=cache/crossfit/oof_sample_counts.json
 
-# 8. Final decisions and both submission files. Cut-off 0.89 keeps as many matches as the
-#    leaderboard-calibrated choice (sub35: model probabilities are over-confident on test,
-#    true rate ~ prob^2.55); 8b drops French rule-rescued matches below that calibration.
+# 8. Final decisions and both submission files. The cut-off comes from the leaderboard: model
+#    probabilities are over-confident on test (sub35, sub37: true rate ~ prob^3.19), so 0.92 is
+#    the F0.5 optimum; 8b drops French rule-rescued matches below that calibration and French
+#    matches the model rates below 0.9.
 $PY src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/final_base \
     --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France \
     --typo-rescue 0.8664 --group-rules cache/rules_v8e \
-    --calibrated cache/test_pc_final.parquet --calibrated-min 0.89
-$PY src/france_veto.py output/final_base output/final cache/test_pc_cf_France.parquet
+    --calibrated cache/test_pc_final.parquet --calibrated-min 0.92
+$PY src/france_veto.py output/final_base output/final cache/test_pc_cf_France.parquet --main-min 0.9
 
 # 8c. Package: output/ + code/ + documentation in the organisers' zip layout
 $PY src/make_package.py output/final Dronaut

@@ -17,7 +17,7 @@ one business word swapped, an extra business word). A model tuned on train valid
 over-confident on them. We measure this shift from pair densities (true variants are
 generated the same way in train and test, so any excess of a pair type on test is decoys),
 turn it into decision rules and a prior-corrected second-stage model with record-to-record
-"cohesion" evidence, and raised the public leaderboard from 0.9356 to **0.9681**.
+"cohesion" evidence, and raised the public leaderboard from 0.9356 to **0.9722**.
 
 ---
 
@@ -163,7 +163,9 @@ held-out entities re-weighted to test levels.
 | **sub33** | **+ cross-fitted 898K entities, rival / context / cohesion features, floor 0.02** | **0.9681** |
 | sub34 | deterministic re-run of sub33 | 0.968043 |
 | sub35 | cut-off 0.39 (probe) | 0.958349 |
-| sub38 (final) | larger second stage, leaderboard-calibrated cut-off, French calibrated veto | see portal |
+| sub37 | cut-off 0.85 + French calibrated veto | 0.970977 |
+| sub38 | larger second stage (127 leaves x 800 rounds), count-matched cut-off | 0.971088 |
+| **sub40 (final)** | **cut-off 0.92 (curve refit on sub37: true ~ prob^3.19), French low-confidence veto** | **0.972202** |
 
 - **Common false positives (wrong merges):** neighbouring businesses built to look alike: the
   same name a few house numbers away (221 vs 225, 19 vs 22), one business word swapped or
@@ -183,8 +185,8 @@ held-out entities re-weighted to test levels.
 A standard blocking + gradient-boosting pipeline reaches 0.975 on train validation but loses
 precision on test, where look-alike decoys are twice as frequent. Measuring that shift from
 pair densities, without labels, and correcting the decision for it (type-specific rules and a
-prior-corrected second stage with cohesion evidence) was worth +0.033 on the public leaderboard
-(0.9356 -> 0.9681)
+prior-corrected second stage with cohesion evidence) was worth +0.037 on the public leaderboard
+(0.9356 -> 0.9722)
 while keeping 5.3 candidates per entity. The main lesson: when test differs from train,
 validate the decision rule against the target distribution, not only the model.
 
@@ -201,7 +203,7 @@ data -> blocking -> matching -> output) and `requirements.txt` (pinned). Entry p
 `group_rules.py`, `crossfit_prep.py`, `prior_stack.py`, `finalize.py`. The second stage and
 the final step are deterministic (identical output on repeated runs). Note: the submitted second stage was trained with the
 street-agreement split enabled on the validation side only (`prior_stack.py --street`); the
-README reproduces that configuration as submitted. The packaged output is sub38 (README steps
+README reproduces that configuration as submitted. The packaged output is sub40 (README steps
 7-8c).
 
 ### B. Additional Results

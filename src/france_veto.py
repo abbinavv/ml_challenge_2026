@@ -1,6 +1,6 @@
 """Drop French matches that the rescue rules added but the calibrated model rejects.
 
-Usage: python src/france_veto.py <in_dir> <out_dir> <france_pc.parquet> [--gamma 2.55] [--min 0.78]
+Usage: python src/france_veto.py <in_dir> <out_dir> <france_pc.parquet> [--gamma 2.55] [--min 0.78] [--main-min 0.9]
 
 France has no labels, so its matches below first-stage 0.97 come from rescue rules with rates
 borrowed from the US. Each is re-scored by the prior-corrected model encoded as US
@@ -27,6 +27,8 @@ def main():
     ap.add_argument("in_dir"); ap.add_argument("out_dir"); ap.add_argument("france_pc")
     ap.add_argument("--gamma", type=float, default=2.55); ap.add_argument("--min", type=float, default=0.78)
     ap.add_argument("--scored", default="output/v8_raw/scored_pairs.parquet")
+    ap.add_argument("--main-min", type=float, default=None,
+                    help="also drop ANY French match the model rates below this (sub40: 0.9)")
     a = ap.parse_args()
     fr = load_source("test", 1).filter(pl.col("country") == "France").select(pl.col("entity_id").alias("s1_id"))
     m = read_lists(os.path.join(a.in_dir, "matching_results.tsv")).join(fr, on="s1_id")
@@ -34,6 +36,8 @@ def main():
     pcf = pl.read_parquet(a.france_pc).select("s1_id", "cand_id", "pc")
     x = m.join(v8, on=["s1_id", "cand_id"], how="left").join(pcf, on=["s1_id", "cand_id"], how="left")
     drop = x.filter((pl.col("prob") < 0.97) & ((pl.col("pc").fill_null(0.5) ** a.gamma) < a.min)).select("s1_id", "cand_id")
+    if a.main_min is not None:
+        drop = pl.concat([drop, x.filter(pl.col("pc") < a.main_min).select("s1_id", "cand_id")]).unique()
     tmp = os.path.join(a.out_dir + "_drop.parquet")
     drop.write_parquet(tmp)
     import subprocess

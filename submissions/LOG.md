@@ -437,3 +437,5 @@ calibrate to ~25% true; removing them predicted +0.0001. sub40 predicted ~0.9715
 ```
 python src/toggle.py output/sub39 output/sub40 --remove cache/fr_main_veto_sub40.parquet
 ```
+- Public leaderboard: **sub40 0.972202** (best; predicted ~0.9715). Dronaut_submission.zip rebuilt around sub40.
+  src/france_veto.py --main-min 0.9 reproduces sub40 from sub39_base in one step (verified identical).
