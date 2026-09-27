@@ -390,3 +390,30 @@ the 10,464 below 0.78: predicted +0.0006 over sub36 (-> ~0.9701).
 ```
 python src/toggle.py output/sub36 output/sub37 --remove cache/fr_lowcal_sub37.parquet
 ```
+
+After the leaderboard feedback, I independently compared these output files against sub34:
+sub36 removes 63,738 matches (31,547 US; 32,191 India) and adds 14. Sub37 removes another
+10,464 France matches. The removed sub36 matches have calibrated `pc` mean about 0.75. A
+weighted OOF cutoff sweep weakly favors 0.70-0.75 over 0.85 (about 0.00056 in the US/India
+test-share-weighted proxy), which conflicts with the single-point public-score extrapolation
+above. Therefore sub36 is an informative next leaderboard probe, not a validated improvement;
+the 0.9695 estimate is low confidence. No available result substantiates a 0.99 prediction.
+
+## sub38 (27 Sep ~20:45): FINAL -- larger second stage, count-matched cut-off, France calibrated veto
+
+- Second stage 127 leaves x 800 rounds (was 31 x 400): out-of-fold test-like log-loss 0.0224 ->
+  0.0214; simulation E better at every cut-off (+0.0008 to +0.0015, same weights).
+- It keeps ~25K more matches than the current model at the same cut-off; sub35 showed extra
+  mid-confidence pairs hurt on test, so the cut-off (0.89) keeps the same number of US/India
+  matches as sub36 (current model at 0.85): the change is re-ranking, not loosening.
+- France: src/france_veto.py drops 10,464 rule-rescued French matches whose calibrated rate
+  (model encoded as US, true ~ prob^2.55) is below 0.78 (as in sub37).
+- 5,772,061 matches; vs sub37 -28,534 / +27,638. Predicted ~0.970 (sub36 0.9695 + France
+  +0.0006 + re-ranking ~+0.0003). Dronaut_submission.zip rebuilt around sub38
+  (src/make_package.py: runs the official checker, scans for credentials).
+```
+python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf_low.parquet cache/test_pc_final.parquet --street --context --cohesion --floor=0.02 --gbm=127,800 --n-val-json=cache/crossfit/oof_sample_counts.json
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub38_base --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.89
+python src/france_veto.py output/sub38_base output/sub38 cache/test_pc_cf_France.parquet
+python src/make_package.py output/sub38 Dronaut
+```

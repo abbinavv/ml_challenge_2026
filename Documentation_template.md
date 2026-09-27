@@ -126,9 +126,13 @@ numbers conflict weighted x3.
    other confident vs rejected candidates). Negatives are re-weighted per group to test
    levels (test negatives per entity = test pairs per entity - validation true pairs per
    entity), so it learns P_test(true | pair). It scores pairs down to first-stage 0.02 (1.5%
-   of true matches scored below 0.3) and keeps P >= 0.7. France (no labels) keeps steps 1-5,
-   borrowing only US rescue rules for kinds that cannot be another business at the same
-   address.
+   of true matches scored below 0.3); 127 leaves x 800 rounds. The cut-off was set from the
+   leaderboard itself: lowering it to 0.39 (sub35) cost 0.0097, showing the model's mid-range
+   probabilities are over-confident on test (pairs rated 0.52 were ~18.5% true; true rate ~
+   prob^2.55), so the final cut-off keeps pairs whose calibrated rate clears the F0.5
+   break-even. France (no labels) keeps steps 1-5, borrowing only US rescue rules for kinds
+   that cannot be another business at the same address; French rescued matches whose
+   calibrated rate (same model encoded as US) is below break-even are dropped.
 7. Sibling expansion: an unclaimed record with the same country, key name and address key as
    a matched record joins that match (99.9% same business on train truth).
 
@@ -157,6 +161,9 @@ held-out entities re-weighted to test levels.
 | sub22 | test-calibrated decision rules (steps 2-4) | 0.963841 |
 | sub26 | + prior-corrected second stage (150K entities) | 0.967148 |
 | **sub33** | **+ cross-fitted 898K entities, rival / context / cohesion features, floor 0.02** | **0.9681** |
+| sub34 | deterministic re-run of sub33 | 0.968043 |
+| sub35 | cut-off 0.39 (probe) | 0.958349 |
+| sub38 (final) | larger second stage, leaderboard-calibrated cut-off, French calibrated veto | see portal |
 
 - **Common false positives (wrong merges):** neighbouring businesses built to look alike: the
   same name a few house numbers away (221 vs 225, 19 vs 22), one business word swapped or
@@ -194,9 +201,8 @@ data -> blocking -> matching -> output) and `requirements.txt` (pinned). Entry p
 `group_rules.py`, `crossfit_prep.py`, `prior_stack.py`, `finalize.py`. The second stage and
 the final step are deterministic (identical output on repeated runs). Note: the submitted second stage was trained with the
 street-agreement split enabled on the validation side only (`prior_stack.py --street`); the
-README reproduces that configuration as submitted. The packaged output (sub34) is the
-deterministic re-run of the sub33 method; it differs from the scored sub33 file in 0.12% of
-matches (thread-level randomness in that run).
+README reproduces that configuration as submitted. The packaged output is sub38 (README steps
+7-8c).
 
 ### B. Additional Results
 

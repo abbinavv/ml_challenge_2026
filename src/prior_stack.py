@@ -39,6 +39,7 @@ BAND_WEIGHTS = "--band-weights" in sys.argv
 # features (agreement with the entity's confident / rejected candidates) -- ber/rivals.py
 CONTEXT = "--context" in sys.argv
 COHESION = "--cohesion" in sys.argv
+GBM_LEAVES, GBM_ROUNDS = (int(x) for x in next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--gbm=")), "31,400").split(","))
 FLOOR = float(next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--floor=")), 0.3))   # lowest first-stage prob scored     # record-to-record cohesion features (needs --context)
 APPLY_TO = next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--apply-to=")), None)
 N_VAL = {"US": 90123, "India": 59877}
@@ -142,7 +143,7 @@ def main():
     v = v.sort("s1_id", "cand_id"); t = t.sort("s1_id", "cand_id")
     w = np.where(v["label"].to_numpy() == 1, 1.0, v["w_neg"].to_numpy())
     Xv, y = X(v), v["label"].to_numpy()
-    params = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in_leaf=200, lambda_l2=5.0,
+    params = dict(objective="binary", learning_rate=0.05, num_leaves=GBM_LEAVES, min_data_in_leaf=200, lambda_l2=5.0,
                   verbose=-1, seed=7, num_threads=10, deterministic=True, force_col_wise=True)
     cat_idx = [len(NUM), len(NUM) + 1, len(NUM) + 2]
     ents = v["s1_id"].to_numpy()
@@ -151,7 +152,7 @@ def main():
     oof = np.zeros(len(y))
     for k in range(5):
         tr, te = fold != k, fold == k
-        m = lgb.train(params, lgb.Dataset(Xv[tr], label=y[tr], weight=w[tr], categorical_feature=cat_idx), num_boost_round=400)
+        m = lgb.train(params, lgb.Dataset(Xv[tr], label=y[tr], weight=w[tr], categorical_feature=cat_idx), num_boost_round=GBM_ROUNDS)
         oof[te] = m.predict(Xv[te])
     def wll(p):
         p = np.clip(p, 1e-6, 1 - 1e-6)
@@ -163,7 +164,7 @@ def main():
         print(f"  {name:13s}: test-like precision {tp / (tp + fp):.4f}, recall among pairs >= 0.3 {tp / pos:.4f}")
     v.select("s1_id", "cand_id", "country", "prob", "label", "nc", "nk", "band").with_columns(pl.Series("w", w), pl.Series("oof", oof)) \
      .write_parquet(out.replace(".parquet", "_val_oof.parquet"))
-    m = lgb.train(params, lgb.Dataset(Xv, label=y, weight=w, categorical_feature=cat_idx), num_boost_round=400)
+    m = lgb.train(params, lgb.Dataset(Xv, label=y, weight=w, categorical_feature=cat_idx), num_boost_round=GBM_ROUNDS)
     t = t.with_columns(pl.Series("pc", m.predict(X(t))))
     t.select("s1_id", "cand_id", "country", "prob", "pc").write_parquet(out)
     if APPLY_TO:

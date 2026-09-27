@@ -7,8 +7,8 @@ Source-1 entity (singletons included).
 Pipeline: **normalise → block (candidate generation) → LightGBM pair model (two-stage
 cascade) → label-free test calibration → decision rules → submission files.**
 
-Final submission: this pipeline (sub34); the same method scored **0.9681** on the public
-leaderboard (sub33, 27 Sep 2026).
+Final submission: this pipeline (sub38). Earlier versions of the same method scored **0.9681**
+(sub33) and **0.968043** (sub34) on the public leaderboard (27 Sep 2026).
 `candidate_pairs.tsv` holds **5.30 candidates per Source-1 entity**.
 
 ## Environment
@@ -69,17 +69,27 @@ $PY src/crossfit_prep.py
 
 # 7. Prior-corrected second stage for US/India on 898K cross-fitted entities: fine pair
 #    features + rival, list-context and record-to-record cohesion features, first-stage
-#    scores down to 0.02. --street: validation-side tags split far/no-number groups by
-#    street agreement (as for every submitted second stage).
+#    scores down to 0.02, 127 leaves x 800 rounds. --street: validation-side tags split
+#    far/no-number groups by street agreement (as for every submitted second stage).
 $PY src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet \
     cache/crossfit/test_tags_cf_low.parquet cache/test_pc_final.parquet \
-    --street --context --cohesion --floor=0.02 --n-val-json=cache/crossfit/oof_sample_counts.json
+    --street --context --cohesion --floor=0.02 --gbm=127,800 --n-val-json=cache/crossfit/oof_sample_counts.json
+#    France (no labels) scored by the base second stage encoded as US, for step 8b
+$PY src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet \
+    cache/crossfit/test_tags_cf.parquet cache/test_pc_cf.parquet \
+    --street --apply-to=France:US --n-val-json=cache/crossfit/oof_sample_counts.json
 
-# 8. Final decisions and both submission files
-$PY src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/final \
+# 8. Final decisions and both submission files. Cut-off 0.89 keeps as many matches as the
+#    leaderboard-calibrated choice (sub35: model probabilities are over-confident on test,
+#    true rate ~ prob^2.55); 8b drops French rule-rescued matches below that calibration.
+$PY src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/final_base \
     --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France \
     --typo-rescue 0.8664 --group-rules cache/rules_v8e \
-    --calibrated cache/test_pc_final.parquet --calibrated-min 0.7
+    --calibrated cache/test_pc_final.parquet --calibrated-min 0.89
+$PY src/france_veto.py output/final_base output/final cache/test_pc_cf_France.parquet
+
+# 8c. Package: output/ + code/ + documentation in the organisers' zip layout
+$PY src/make_package.py output/final Dronaut
 
 # 9. Official checker
 python3 data/utils/validate_submission.py \
@@ -88,9 +98,10 @@ python3 data/utils/validate_submission.py \
     --test-dir data/dataset/test --check-ids
 ```
 
-Steps 6-8 are deterministic (LightGBM deterministic mode, fixed tie-breaks): two runs from
-the saved cross-fit outputs give identical files (5,851,961 matches before the word veto;
-9,186,608 candidate pairs).
+The main second stage (step 7, first command) and steps 8-8c are deterministic (LightGBM
+deterministic mode, fixed tie-breaks): repeated runs give identical files. The France scoring
+run (step 7, second command) was made before the determinism fix; a re-run can differ in a
+handful of French decisions.
 
 ## Code map
 
@@ -113,6 +124,8 @@ the saved cross-fit outputs give identical files (5,851,961 matches before the w
 | `src/group_rules.py` | Label-free rescue / veto rules per (country, score band, number relation, name change) |
 | `src/crossfit_prep.py` | Samples the cross-fitted train scores, averages the test scores, tags test pairs |
 | `src/prior_stack.py` | Prior-corrected second stage (test-level negative weights; rival, context and cohesion features) |
+| `src/france_veto.py` | Drops French rule-rescued matches the calibrated model rejects |
+| `src/make_package.py` | Builds the submission zip (runs the official checker, scans for credentials) |
 | `src/finalize.py` | Candidate set, one-owner, threshold, rules, calibrated decision, sibling expansion, files |
 | `aws/ec2_train.sh`, `aws/ec2_crossfit.sh` | EC2 training / cross-fitting runs |
 
