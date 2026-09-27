@@ -449,3 +449,4 @@ under both); 0.95 0.9731 / 0.9724; 0.97 0.9724 / 0.9712. French main cut-off alr
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub41_base --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.94
 python src/france_veto.py output/sub41_base output/sub41 cache/test_pc_cf_France.parquet --main-min 0.9
 ```
+- Public leaderboard: **sub41 0.973202** (best). Zip rebuilt around sub41.
