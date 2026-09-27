@@ -417,3 +417,5 @@ python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/su
 python src/france_veto.py output/sub38_base output/sub38 cache/test_pc_cf_France.parquet
 python src/make_package.py output/sub38 Dronaut
 ```
+- Public leaderboard: **sub37 0.970977**, **sub38 0.971088** (best). Both above prediction (~0.970):
+  the leaderboard-calibrated cut-off works; the model is at least as over-confident as the sub35 curve.
