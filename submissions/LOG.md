@@ -334,3 +334,49 @@ python src/crossfit_prep.py
 python src/prior_stack.py cache/crossfit/oof_sample.parquet cache/crossfit/test_avg_scored.parquet cache/crossfit/test_tags_cf_low.parquet cache/test_pc_final.parquet --street --context --cohesion --floor=0.02 --n-val-json=cache/crossfit/oof_sample_counts.json
 python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/final --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_final.parquet --calibrated-min 0.7
 ```
+
+## K100 wide-blocker check (27 Sep, afternoon): medium model on a separate holdout
+
+Fit a K100 (`max_df=0.05`) blocker/model using 200K train entities and 50K validation entities
+from a 500K sampled K100 candidate cache; S1 truth density was reduced by hiding 18.6% of
+owners. The fit completed at 983 rounds; internal validation macro F0.5 was 0.9737 (P=0.993,
+R=0.941, singleton F0.5=0.953). On a distinct 150K entity holdout, a disjoint 20% calibration
+subset selected threshold 0.65; on the remaining 80% at the same 18.6% owner-hidden rate:
+
+| Candidate set | F0.5 | Precision | Recall | Singleton F0.5 |
+|---|---:|---:|---:|---:|
+| Base blocker | 0.97031 | 0.99117 | 0.93921 | 0.95481 |
+| K100 expanded | **0.97249** | 0.99094 | 0.94484 | 0.95247 |
+
+Expansion increased generated rows from 4.71M to 15.22M over these 150K entities (3.23x), for a
+held-out gain of 0.00218 macro F0.5. This is train-label holdout evidence (US/India), not an
+official score prediction; France has no train labels, and this run did not include the full
+cross-fit/context/veto stack or a public leaderboard evaluation. Do not interpret it as evidence
+that 0.99 is achievable. The new model and log remain on EC2 instance `i-0a94e5e3d1fc80593`,
+which was stopped after evaluation; local driver: `/private/tmp/eval_k100_medium.py`.
+
+## sub35_candidate public result (27 Sep): reject the lower calibration cutoff
+
+Public leaderboard score reported by the user: **0.958349**. This is substantially below sub33
+(0.9681). The .39 calibration minimum raised predictions to 3.444 matches/entity from sub34's
+3.375 without adequate evidence that the extra lower-confidence predictions helped. Do not
+resubmit sub35_candidate. The held-out K100 result above did not validate this cutoff change.
+
+## sub34 public result (27 Sep): deterministic baseline confirmed
+
+Public leaderboard score reported by the user for `Dronaut_submission.zip`: **0.968043**.
+This is within 0.000057 of sub33's 0.9681 and confirms that the deterministic sub34 package
+reproduces the best known performance. Use sub34 as the current benchmark for remaining trials.
+
+## sub34 public result (27 Sep): **0.968043** (Dronaut_submission.zip output; = sub33 method, deterministic)
+
+## sub36 (27 Sep ~17:30): stricter second-stage cut-off, calibrated on sub35's leaderboard drop
+
+sub35 (cut-off 0.39) added 119,611 matches the model rated 0.516 on average and lost 0.0097:
+their implied true rate on test is 0.185 (per-entity F0.5 expectation). Fitting
+true_rate = model_prob ^ 2.55 through that point: sub34's matches rated 0.7-0.85 (63,738) are
+~51% true, below the F0.5 break-even (~0.78). Cut-off 0.85 predicted 0.9695 (+0.0015 over sub34);
+0.9 predicted 0.9692. One calibration point: the upload tests the curve.
+```
+python src/finalize.py output/v8_raw/scored_pairs.parquet artifacts/v8 output/sub36 --keep 0.99 --threshold 0.97 --word-veto --neighbour-veto US France --typo-rescue 0.8664 --group-rules cache/rules_v8e --calibrated cache/test_pc_cfl_det.parquet --calibrated-min 0.85
+```
